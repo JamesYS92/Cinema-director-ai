@@ -70,6 +70,7 @@ export interface YouTubeVideoMeta {
   duration: number;
   orientation: 'portrait' | 'landscape' | 'square';
   thumbnailUrl: string;
+  frameSource?: 'storyboard' | 'thumbnail';
 }
 
 export interface StoryboardFrameRef {

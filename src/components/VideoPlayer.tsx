@@ -48,6 +48,7 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
   const [youtubeMeta, setYoutubeMeta] = useState<{ title: string; duration: number } | null>(null);
   const [youtubeLoading, setYoutubeLoading] = useState(false);
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
+  const [youtubeWarning, setYoutubeWarning] = useState<string | null>(null);
 
   const activeVideoUrl = sourceType === 'local' ? localUrl : directUrl;
 
@@ -106,6 +107,7 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
       setDirectUrl(null);
       setYoutubeMeta(null);
       setYoutubeError(null);
+      setYoutubeWarning(null);
       setYoutubeLoading(true);
       onVideoFile(null, trimmed);
 
@@ -130,6 +132,7 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
       setYoutubeId(null);
       setYoutubeMeta(null);
       setYoutubeError(null);
+      setYoutubeWarning(null);
       setDirectUrl(trimmed);
       onVideoFile(null, trimmed);
       return;
@@ -198,9 +201,14 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
     setYoutubeError(null);
 
     try {
-      const { frames } = await extractYouTubeStoryboardFrames(videoId, count);
+      const { meta, frames } = await extractYouTubeStoryboardFrames(videoId, count);
       const captures = await storyboardRefsToCaptures(frames);
       onBatchCapture(captures, true);
+      if (meta.frameSource === 'thumbnail') {
+        setYoutubeWarning(
+          '이 영상은 스토리보드 미리보기가 없어 고화질 썸네일로 대체했습니다. 정밀 분석은 로컬 파일 업로드를 권장합니다.',
+        );
+      }
     } catch (err) {
       setYoutubeError(
         err instanceof Error ? err.message : 'YouTube 프레임 추출에 실패했습니다.',
@@ -407,6 +415,7 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
       )}
 
       {youtubeError && <p className="youtube-error">{youtubeError}</p>}
+      {youtubeWarning && <p className="youtube-warning">{youtubeWarning}</p>}
 
       {youtubeId && youtubeMeta && (
         <div className="youtube-meta">

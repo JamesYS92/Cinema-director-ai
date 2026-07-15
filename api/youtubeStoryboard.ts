@@ -7,6 +7,7 @@ export interface YouTubeVideoMeta {
   duration: number;
   orientation: VideoOrientation;
   thumbnailUrl: string;
+  frameSource: 'storyboard' | 'thumbnail';
 }
 
 export interface StoryboardFrameRef {
@@ -28,6 +29,14 @@ interface StoryboardLevel {
   replacement: string;
   sigh: string;
 }
+
+const WATCH_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  Cookie: 'CONSENT=YES+cb; SOCS=CAI',
+};
 
 function parseIsoDuration(iso: string): number {
   const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
@@ -55,29 +64,79 @@ function sampleEvenly<T>(items: T[], count: number): T[] {
   });
 }
 
-async function fetchWatchPagePlayer(videoId: string): Promise<Record<string, unknown>> {
-  const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
-    },
-  });
+function extractBalancedJson(html: string, marker: string): string | null {
+  const idx = html.indexOf(marker);
+  if (idx < 0) return null;
+  const start = html.indexOf('{', idx);
+  if (start < 0) return null;
 
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < html.length; i++) {
+    const ch = html[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) return html.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function extractSpecFromHtml(html: string): string | null {
+  const direct = html.match(/"playerStoryboardSpecRenderer":\{"spec":"((?:\\.|[^"\\])*)"/);
+  if (direct?.[1]) {
+    return direct[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+  }
+  return null;
+}
+
+async function fetchPageHtml(url: string): Promise<string> {
+  const res = await fetch(url, { headers: WATCH_HEADERS });
   if (!res.ok) {
     throw new Error('YouTube 영상 페이지를 불러오지 못했습니다.');
   }
+  return res.text();
+}
 
-  const html = await res.text();
-  const match =
-    html.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/) ??
-    html.match(/var\s+ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;/);
+async function fetchWatchPagePlayer(videoId: string): Promise<Record<string, unknown>> {
+  const urls = [
+    `https://www.youtube.com/shorts/${videoId}`,
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ];
 
-  if (!match?.[1]) {
-    throw new Error('YouTube 플레이어 정보를 찾을 수 없습니다.');
+  let lastError = 'YouTube 플레이어 정보를 찾을 수 없습니다.';
+
+  for (const url of urls) {
+    try {
+      const html = await fetchPageHtml(url);
+      const jsonText =
+        extractBalancedJson(html, 'ytInitialPlayerResponse') ??
+        extractBalancedJson(html, 'var ytInitialPlayerResponse');
+
+      if (!jsonText) continue;
+      return JSON.parse(jsonText) as Record<string, unknown>;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : lastError;
+    }
   }
 
-  return JSON.parse(match[1]) as Record<string, unknown>;
+  throw new Error(lastError);
 }
 
 function parseStoryboardLevels(spec: string): { baseUrl: string; levels: StoryboardLevel[] } {
@@ -113,6 +172,17 @@ function buildSpriteUrl(baseUrl: string, level: StoryboardLevel, sheetIndex: num
   return url;
 }
 
+async function isSpriteUrlReachable(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(url, { method: 'GET', headers: WATCH_HEADERS });
+    if (!res.ok) return false;
+    const buf = await res.arrayBuffer();
+    return buf.byteLength > 1000;
+  } catch {
+    return false;
+  }
+}
+
 function buildFramesFromLevel(
   baseUrl: string,
   level: StoryboardLevel,
@@ -141,11 +211,20 @@ function buildFramesFromLevel(
   return frames;
 }
 
-function parseStoryboardSpec(spec: string, duration: number): StoryboardFrameRef[] {
+async function parseStoryboardSpec(spec: string, duration: number): Promise<StoryboardFrameRef[]> {
   const { baseUrl, levels } = parseStoryboardLevels(spec);
   if (!baseUrl || levels.length === 0) return [];
 
   const sorted = [...levels].sort((a, b) => b.width * b.height - a.width * a.height);
+  for (const level of sorted) {
+    const probeUrl = buildSpriteUrl(baseUrl, level, 0);
+    const reachable = await isSpriteUrlReachable(probeUrl);
+    if (!reachable && level.levelIndex > 0) continue;
+
+    const frames = buildFramesFromLevel(baseUrl, level, duration);
+    if (frames.length > 0) return frames;
+  }
+
   for (const level of sorted) {
     const frames = buildFramesFromLevel(baseUrl, level, duration);
     if (frames.length > 0) return frames;
@@ -154,10 +233,13 @@ function parseStoryboardSpec(spec: string, duration: number): StoryboardFrameRef
   return [];
 }
 
-function extractStoryboardSpec(player: Record<string, unknown>): string | null {
+function extractStoryboardSpec(
+  player: Record<string, unknown>,
+  htmlSpec?: string | null,
+): string | null {
   const storyboards = player.storyboards as Record<string, unknown> | undefined;
   const renderer = storyboards?.playerStoryboardSpecRenderer as { spec?: string } | undefined;
-  return renderer?.spec ?? null;
+  return renderer?.spec ?? htmlSpec ?? null;
 }
 
 function extractVideoDetails(player: Record<string, unknown>) {
@@ -188,7 +270,20 @@ function metaFromPlayer(player: Record<string, unknown>, videoId: string): YouTu
     duration,
     orientation: getOrientation(bestThumb?.width ?? 0, bestThumb?.height ?? 0),
     thumbnailUrl: bestThumb?.url ?? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    frameSource: 'storyboard',
   };
+}
+
+function buildThumbnailFallback(meta: YouTubeVideoMeta, count: number): StoryboardFrameRef[] {
+  const duration = meta.duration || count;
+  return Array.from({ length: count }, (_, i) => ({
+    spriteUrl: meta.thumbnailUrl,
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    timestamp: duration > 0 ? (duration * i) / Math.max(count - 1, 1) : i,
+  }));
 }
 
 export async function fetchYouTubeVideoMeta(
@@ -208,7 +303,11 @@ export async function fetchYouTubeVideoMeta(
           snippet: {
             title: string;
             channelTitle: string;
-            thumbnails?: { maxres?: { url: string }; high?: { url: string } };
+            thumbnails?: {
+              maxres?: { url: string };
+              standard?: { url: string };
+              high?: { url: string };
+            };
           };
           contentDetails: { duration: string };
         }>;
@@ -218,6 +317,7 @@ export async function fetchYouTubeVideoMeta(
         const duration = parseIsoDuration(item.contentDetails.duration);
         const thumb =
           item.snippet.thumbnails?.maxres?.url ??
+          item.snippet.thumbnails?.standard?.url ??
           item.snippet.thumbnails?.high?.url ??
           `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
         return {
@@ -227,6 +327,7 @@ export async function fetchYouTubeVideoMeta(
           duration,
           orientation: duration <= 60 ? 'portrait' : 'landscape',
           thumbnailUrl: thumb,
+          frameSource: 'storyboard',
         };
       }
     }
@@ -241,7 +342,33 @@ export async function fetchYouTubeStoryboardFrames(
   count: number,
   apiKey?: string,
 ): Promise<{ meta: YouTubeVideoMeta; frames: StoryboardFrameRef[] }> {
-  const player = await fetchWatchPagePlayer(videoId);
+  const urls = [
+    `https://www.youtube.com/shorts/${videoId}`,
+    `https://www.youtube.com/watch?v=${videoId}`,
+  ];
+
+  let player: Record<string, unknown> | null = null;
+  let htmlSpec: string | null = null;
+
+  for (const url of urls) {
+    try {
+      const html = await fetchPageHtml(url);
+      htmlSpec = htmlSpec ?? extractSpecFromHtml(html);
+      const jsonText =
+        extractBalancedJson(html, 'ytInitialPlayerResponse') ??
+        extractBalancedJson(html, 'var ytInitialPlayerResponse');
+      if (jsonText) {
+        player = JSON.parse(jsonText) as Record<string, unknown>;
+        break;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+
+  if (!player) {
+    throw new Error('YouTube 영상 정보를 불러오지 못했습니다.');
+  }
 
   let meta: YouTubeVideoMeta;
   if (apiKey) {
@@ -259,13 +386,23 @@ export async function fetchYouTubeStoryboardFrames(
     meta.duration = parseInt(details.lengthSeconds, 10) || meta.duration;
   }
 
-  const spec = extractStoryboardSpec(player);
+  const spec = extractStoryboardSpec(player, htmlSpec);
   if (spec) {
-    const allFrames = parseStoryboardSpec(spec, meta.duration);
+    const allFrames = await parseStoryboardSpec(spec, meta.duration);
     if (allFrames.length > 0) {
       return { meta, frames: sampleEvenly(allFrames, count) };
     }
   }
 
-  throw new Error('YouTube 스토리보드 프레임을 찾을 수 없습니다. 다른 영상으로 시도해 주세요.');
+  if (meta.thumbnailUrl) {
+    meta.frameSource = 'thumbnail';
+    return {
+      meta,
+      frames: buildThumbnailFallback(meta, count),
+    };
+  }
+
+  throw new Error(
+    'YouTube 미리보기 프레임을 가져올 수 없습니다. 연령 제한·비공개·지역 제한 영상이거나 서버에서 스토리보드가 비활성화된 경우입니다.',
+  );
 }
