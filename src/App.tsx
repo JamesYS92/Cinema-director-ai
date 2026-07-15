@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   Clapperboard,
   Settings,
@@ -27,8 +27,9 @@ import type {
 } from './types';
 import { PRESET_DESCRIPTIONS, PRESET_LABELS } from './types';
 import { saveAnalysisRecord } from './utils/analysisHistory';
-import { generateId, getApiKey, getYoutubeApiKey } from './utils/storage';
+import { generateId } from './utils/storage';
 import { detectDominantOrientation } from './utils/video';
+import { fetchApiStatus } from './services/apiClient';
 
 const PROGRESS_MESSAGES: Record<AnalysisProgressStep, string> = {
   keywords: '키워드 추출 중...',
@@ -60,8 +61,15 @@ export default function App() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
-  const [hasApiKey, setHasApiKey] = useState(!!getApiKey());
-  const [hasYoutubeKey, setHasYoutubeKey] = useState(!!getYoutubeApiKey());
+  const [serverReady, setServerReady] = useState(false);
+  const [serverYoutube, setServerYoutube] = useState(false);
+
+  useEffect(() => {
+    fetchApiStatus().then((s) => {
+      setServerReady(s.ready);
+      setServerYoutube(s.youtube);
+    });
+  }, [settingsOpen]);
 
   const handleCapture = useCallback((capture: CaptureResult) => {
     setFrames((prev) => [
@@ -116,10 +124,9 @@ export default function App() {
   };
 
   const handleAnalyze = async () => {
-    const apiKey = getApiKey();
-    if (!apiKey) {
+    if (!serverReady) {
       setSettingsOpen(true);
-      setError('분석을 위해 Gemini API 키를 먼저 등록해 주세요.');
+      setError('서버 API가 준비되지 않았습니다. Vercel 환경변수를 확인해 주세요.');
       return;
     }
     if (frames.length === 0) {
@@ -133,8 +140,6 @@ export default function App() {
     setAnalysisStep('분석 시작...');
     try {
       const result = await runBenchmarkPipeline(
-        apiKey,
-        getYoutubeApiKey(),
         {
           imageDataUrls: frames.map((f) => f.imageDataUrl),
           frameDimensions: frames.map((f) => ({ width: f.width, height: f.height })),
@@ -190,14 +195,14 @@ export default function App() {
           </div>
         </div>
         <div className="header-actions">
-          {!hasApiKey && (
-            <span className="api-badge warning">Gemini 키 미등록</span>
+          {!serverReady && (
+            <span className="api-badge warning">서버 API 미설정</span>
           )}
-          {hasApiKey && !hasYoutubeKey && (
-            <span className="api-badge info">YouTube API 미등록 (AI 추정)</span>
+          {serverReady && !serverYoutube && (
+            <span className="api-badge info">YouTube API 미설정 (AI 추정)</span>
           )}
-          {hasApiKey && hasYoutubeKey && (
-            <span className="api-badge success">YouTube API 등록됨</span>
+          {serverReady && serverYoutube && (
+            <span className="api-badge success">서버 API 준비됨</span>
           )}
           <button
             className="icon-btn"
@@ -303,8 +308,10 @@ export default function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onSaved={() => {
-          setHasApiKey(true);
-          setHasYoutubeKey(!!getYoutubeApiKey());
+          fetchApiStatus().then((s) => {
+            setServerReady(s.ready);
+            setServerYoutube(s.youtube);
+          });
         }}
       />
     </div>

@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI, type Part } from '@google/generative-ai';
+import type { Part } from '@google/generative-ai';
 import type {
   AnalysisPreset,
   AnalysisReport,
@@ -21,6 +21,7 @@ import { fileToBase64, MAX_VIDEO_ANALYSIS_BYTES, formatFileSize } from '../utils
 import { dataUrlToBase64 } from '../utils/storage';
 import { ORIENTATION_LABELS, ORIENTATION_REFERENCE_HINT } from '../utils/video';
 import { fetchThumbnailAsBase64 } from './youtube';
+import { generateViaApi } from './geminiApi';
 
 const PRESET_CONTEXT: Record<AnalysisPreset, string> = {
   cinematic:
@@ -55,11 +56,6 @@ const DEFAULT_METRICS: MarketingMetrics = {
   viralAppeal: 70,
 };
 
-function getModel(apiKey: string) {
-  const genAI = new GoogleGenerativeAI(apiKey);
-  return genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-}
-
 function parseJson<T>(text: string): T {
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error('AI 응답에서 JSON을 찾을 수 없습니다.');
@@ -80,15 +76,6 @@ function thumbnailPart(base64: string): Part {
   return { inlineData: { mimeType: 'image/jpeg', data: base64 } };
 }
 
-export async function validateApiKey(apiKey: string): Promise<boolean> {
-  try {
-    await getModel(apiKey).generateContent('ping');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function emptyVideoAnalysis(reason: string): VideoHolisticAnalysis {
   return {
     usedVideoFile: false,
@@ -105,7 +92,6 @@ function emptyVideoAnalysis(reason: string): VideoHolisticAnalysis {
 
 /** 영상 파일 전체 — 기획/마케팅·조회수 관점 분석 */
 export async function analyzeVideoHolistic(
-  apiKey: string,
   videoFile: File | null,
   preset: AnalysisPreset,
   videoFormat: VideoOrientation,
@@ -143,11 +129,11 @@ export async function analyzeVideoHolistic(
 }`;
 
   try {
-    const result = await getModel(apiKey).generateContent([
+    const text = await generateViaApi([
       { inlineData: { mimeType, data: base64 } },
       prompt,
     ]);
-    const parsed = parseJson<VideoHolisticAnalysis>(result.response.text());
+    const parsed = parseJson<VideoHolisticAnalysis>(text);
     return { ...parsed, usedVideoFile: true };
   } catch {
     return emptyVideoAnalysis('영상 파일 분석 중 오류 — 컷보드 분석으로 대체');
@@ -155,7 +141,6 @@ export async function analyzeVideoHolistic(
 }
 
 export async function generatePlatformEstimatedReferences(
-  apiKey: string,
   keywords: ExtractedKeywords,
   preset: AnalysisPreset,
   platform: PlatformId,
@@ -182,7 +167,7 @@ JSON만 응답:
   ]
 }`;
 
-  const result = await getModel(apiKey).generateContent(prompt);
+  const text = await generateViaApi([prompt]);
   const parsed = parseJson<{
     references: {
       title: string;
@@ -191,7 +176,7 @@ JSON만 응답:
       metrics: MarketingMetrics;
       summary: string;
     }[];
-  }>(result.response.text());
+  }>(text);
 
   return parsed.references.map((r, i) => ({
     video: {
@@ -207,7 +192,6 @@ JSON만 응답:
 }
 
 export async function extractKeywords(
-  apiKey: string,
   imageDataUrls: string[],
   videoFormat: VideoOrientation,
 ): Promise<ExtractedKeywords> {
@@ -229,16 +213,12 @@ JSON만 응답:
   "videoFormat": "${videoFormat}"
 }`;
 
-  const result = await getModel(apiKey).generateContent([
-    prompt,
-    ...imageDataUrls.map(imagePart),
-  ]);
-  const parsed = parseJson<ExtractedKeywords>(result.response.text());
+  const text = await generateViaApi([prompt, ...imageDataUrls.map(imagePart)]);
+  const parsed = parseJson<ExtractedKeywords>(text);
   return { ...parsed, videoFormat };
 }
 
 export async function analyzeReferenceVideos(
-  apiKey: string,
   references: ReferenceVideo[],
   preset: AnalysisPreset,
 ): Promise<ReferenceAnalysis[]> {
@@ -286,9 +266,9 @@ JSON만 응답:
   const parts: (string | Part)[] = [prompt];
   for (const t of thumbnails) parts.push(thumbnailPart(t.base64));
 
-  const result = await getModel(apiKey).generateContent(parts);
+  const text = await generateViaApi(parts);
   const parsed = parseJson<{ references: { index: number; metrics: MarketingMetrics; summary: string }[] }>(
-    result.response.text(),
+    text,
   );
 
   return parsed.references.map((r) => ({
@@ -299,7 +279,6 @@ JSON만 응답:
 }
 
 export async function generateEstimatedReferences(
-  apiKey: string,
   keywords: ExtractedKeywords,
   preset: AnalysisPreset,
   videoFormat: VideoOrientation,
@@ -327,7 +306,7 @@ JSON만 응답:
   ]
 }`;
 
-  const result = await getModel(apiKey).generateContent(prompt);
+  const text = await generateViaApi([prompt]);
   const parsed = parseJson<{
     references: {
       title: string;
@@ -336,7 +315,7 @@ JSON만 응답:
       metrics: MarketingMetrics;
       summary: string;
     }[];
-  }>(result.response.text());
+  }>(text);
 
   return parsed.references.map((r, i) => ({
     video: {
@@ -404,7 +383,6 @@ function computeViewPotential(
 }
 
 export async function generateBenchmarkReport(
-  apiKey: string,
   imageDataUrls: string[],
   preset: AnalysisPreset,
   keywords: ExtractedKeywords,
@@ -504,10 +482,7 @@ JSON만 응답:
 
 조회수는 레퍼런스 조회수(${refData.map((r) => r.views.toLocaleString()).join(', ')})를 기준으로 현실적으로 산출하세요.`;
 
-  const result = await getModel(apiKey).generateContent([
-    prompt,
-    ...imageDataUrls.map(imagePart),
-  ]);
+  const text = await generateViaApi([prompt, ...imageDataUrls.map(imagePart)]);
 
   const parsed = parseJson<
     Omit<AnalysisReport, 'benchmark'> & {
@@ -515,7 +490,7 @@ JSON만 응답:
       targetReview: TargetVideoReview;
       benchmarkSummary: string;
     }
-  >(result.response.text());
+  >(text);
 
   const gaps = computeGaps(parsed.targetMetrics, referenceAnalyses);
   const viewPotential = computeViewPotential(parsed.targetMetrics, referenceAnalyses, dataSource);

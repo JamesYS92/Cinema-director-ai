@@ -21,12 +21,21 @@ npm run dev
 
 브라우저에서 `http://localhost:5173` 접속
 
-## API 키 설정
+## API 키 설정 (Vercel 서버)
 
-1. [Google AI Studio](https://aistudio.google.com/apikey)에서 **Gemini API 키** 발급 (필수)
-2. [Google Cloud Console](https://console.cloud.google.com/apis/library/youtube.googleapis.com)에서 **YouTube Data API** 활성화 후 API 키 발급 (선택, 실제 레퍼런스·유행 영상 검색용)
-3. 앱 우측 상단 ⚙️ 설정에서 키 등록
-4. 키는 브라우저 **localStorage**에만 저장됩니다 (서버에 저장되지 않음)
+API 키는 **Vercel 환경변수**에만 저장됩니다. 링크를 받은 사용자는 키 입력 없이 바로 사용할 수 있습니다.
+
+1. Vercel 대시보드 → 프로젝트 → **Settings → Environment Variables**
+2. 아래 변수 등록 (Production / Preview / Development 모두 체크):
+
+| 변수명 | 설명 |
+|--------|------|
+| `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/apikey)에서 발급 (필수) |
+| `YOUTUBE_API_KEY` | [YouTube Data API](https://console.cloud.google.com/apis/library/youtube.googleapis.com) 키 (선택) |
+
+3. **Redeploy** 후 배포 URL에서 바로 분석 가능
+
+> YouTube API 키 제한: HTTP 리퍼러에 `https://*.vercel.app/*` 추가
 
 > YouTube 임베드 영상은 CORS 제한으로 프레임 캡처가 불가합니다. 로컬 파일 또는 직접 비디오 URL(.mp4)을 사용해 주세요.
 
@@ -68,7 +77,7 @@ git push -u origin main
 | Output Directory | `dist` |
 | Install Command | `npm install` |
 
-5. **Environment Variables** — 이 앱은 서버 환경변수가 **필요 없습니다**. API 키는 사용자가 배포된 사이트에서 직접 설정합니다.
+5. **Environment Variables** — 위 표의 `GEMINI_API_KEY`, `YOUTUBE_API_KEY` 등록
 6. **Deploy** 클릭
 
 배포 완료 후 `https://cinema-director-ai-xxxx.vercel.app` 같은 URL이 생성됩니다.
