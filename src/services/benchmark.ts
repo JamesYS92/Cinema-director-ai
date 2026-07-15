@@ -13,12 +13,13 @@ import { detectDominantOrientation, ORIENTATION_LABELS } from '../utils/video';
 import { prepareFramesForApi } from '../utils/imageCompress';
 import { fetchApiStatus } from './apiClient';
 import {
+  analyzeFrameObservations,
   analyzeReferenceVideos,
   analyzeVideoHolistic,
   extractKeywords,
   generateBenchmarkReport,
   generateEstimatedReferences,
-  generatePlatformEstimatedReferences,
+  generateMultiPlatformEstimatedReferences,
 } from './gemini';
 import {
   resolveEstimatedReference,
@@ -61,47 +62,6 @@ export interface PipelineInput {
   videoTitle?: string;
 }
 
-async function fetchPlatformBenchmark(
-  keywords: Awaited<ReturnType<typeof extractKeywords>>,
-  preset: AnalysisPreset,
-  platform: PlatformId,
-  videoFormat: VideoOrientation,
-  youtubeEnabled: boolean,
-): Promise<PlatformBenchmark> {
-  const label = PLATFORM_LABELS[platform];
-
-  if (youtubeEnabled) {
-    try {
-      const { references, searchQuery } = await searchPlatformReferences(
-        keywords.searchQuery,
-        videoFormat,
-        platform,
-        3,
-      );
-      if (references.length > 0) {
-        const analyses = await analyzeReferenceVideos(references, preset);
-        return { platform, label, references: analyses, dataSource: 'youtube_api', searchQuery };
-      }
-    } catch {
-      /* fall through to AI */
-    }
-  }
-
-  const estimated = await generatePlatformEstimatedReferences(keywords, preset, platform, 3);
-  const references = youtubeEnabled
-    ? await resolveReferenceAnalyses(estimated, videoFormat, true)
-    : estimated;
-  return {
-    platform,
-    label,
-    references,
-    dataSource: references.some((r) => !r.video.videoId.startsWith('estimated-'))
-      ? 'youtube_api'
-      : 'ai_estimated',
-    searchQuery: `${keywords.searchQuery} (${label} AI 추정)`,
-  };
-}
-
 export async function runBenchmarkPipeline(
   input: PipelineInput,
   onProgress?: ProgressCallback,
@@ -121,8 +81,11 @@ export async function runBenchmarkPipeline(
   onProgress?.('keywords', `전체 ${imageDataUrls.length}컷 압축·최적화 중...`);
   const apiImages = await prepareFramesForApi(imageDataUrls);
 
-  onProgress?.('keywords', `${formatLabel} — ${apiImages.length}컷 키워드 추출 중...`);
-  const keywords = await extractKeywords(apiImages, videoFormat);
+  onProgress?.('keywords', `${formatLabel} — ${apiImages.length}컷 프레임 분석 중...`);
+  const frameObservations = await analyzeFrameObservations(apiImages);
+
+  onProgress?.('keywords', `${formatLabel} — 키워드 추출 중...`);
+  const keywords = await extractKeywords(apiImages, videoFormat, frameObservations);
 
   let trendingVideos: TrendingVideo[] = [];
   if (youtubeEnabled) {
@@ -139,10 +102,82 @@ export async function runBenchmarkPipeline(
 
   onProgress?.('search', '플랫폼별 고조회수 레퍼런스 검색 중...');
   const platformBenchmarks: PlatformBenchmark[] = [];
+  let sharedReferences: ReferenceAnalysis[] | null = null;
+  const pendingAiPlatforms: PlatformId[] = [];
+
   for (const platform of PLATFORMS) {
-    onProgress?.('search', `${PLATFORM_LABELS[platform]} 레퍼런스 검색 중...`);
-    const pb = await fetchPlatformBenchmark(keywords, preset, platform, videoFormat, youtubeEnabled);
-    platformBenchmarks.push(pb);
+    const label = PLATFORM_LABELS[platform];
+    onProgress?.('search', `${label} 레퍼런스 검색 중...`);
+
+    if (sharedReferences && sharedReferences.length > 0) {
+      platformBenchmarks.push({
+        platform,
+        label,
+        references: sharedReferences.slice(0, 3),
+        dataSource: sharedReferences.some((r) => !r.video.videoId.startsWith('estimated-'))
+          ? 'youtube_api'
+          : 'ai_estimated',
+        searchQuery: keywords.searchQuery,
+      });
+      continue;
+    }
+
+    if (youtubeEnabled) {
+      try {
+        const { references, searchQuery } = await searchPlatformReferences(
+          keywords.searchQuery,
+          videoFormat,
+          platform,
+          3,
+        );
+        if (references.length > 0) {
+          sharedReferences = await analyzeReferenceVideos(references, preset);
+          platformBenchmarks.push({
+            platform,
+            label,
+            references: sharedReferences,
+            dataSource: 'youtube_api',
+            searchQuery,
+          });
+          continue;
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+
+    pendingAiPlatforms.push(platform);
+  }
+
+  if (pendingAiPlatforms.length > 0 && !sharedReferences) {
+    onProgress?.('search', 'AI 레퍼런스 추정 중...');
+    const multi = await generateMultiPlatformEstimatedReferences(keywords, preset, pendingAiPlatforms);
+    for (const platform of pendingAiPlatforms) {
+      const label = PLATFORM_LABELS[platform];
+      const estimated = multi[platform] ?? [];
+      const references = youtubeEnabled
+        ? await resolveReferenceAnalyses(estimated, videoFormat, true)
+        : estimated;
+      platformBenchmarks.push({
+        platform,
+        label,
+        references,
+        dataSource: references.some((r) => !r.video.videoId.startsWith('estimated-'))
+          ? 'youtube_api'
+          : 'ai_estimated',
+        searchQuery: `${keywords.searchQuery} (${label} AI 추정)`,
+      });
+    }
+  } else if (pendingAiPlatforms.length > 0 && sharedReferences) {
+    for (const platform of pendingAiPlatforms) {
+      platformBenchmarks.push({
+        platform,
+        label: PLATFORM_LABELS[platform],
+        references: sharedReferences.slice(0, 3),
+        dataSource: 'youtube_api',
+        searchQuery: keywords.searchQuery,
+      });
+    }
   }
 
   let referenceAnalyses = platformBenchmarks.find((p) => p.platform === 'youtube')?.references ?? [];
@@ -196,6 +231,7 @@ export async function runBenchmarkPipeline(
     videoFormat,
     targetThumbnail,
     trendingVideos,
+    frameObservations,
   );
 
   onProgress?.('done', '분석 완료');

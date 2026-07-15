@@ -1,5 +1,5 @@
-const MAX_API_WIDTH = 512;
-const JPEG_QUALITY = 0.55;
+const MAX_API_WIDTH = 480;
+const JPEG_QUALITY = 0.5;
 
 export async function compressDataUrl(
   dataUrl: string,
