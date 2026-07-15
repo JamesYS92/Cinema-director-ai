@@ -1,7 +1,7 @@
 export const config = { runtime: 'edge' };
 
 const DEFAULT_PROXY_URL = 'https://vibe-llm-proxy-17280846291.asia-northeast3.run.app';
-const DEFAULT_PROXY_MODEL = 'gemini-2.0-flash-lite';
+const DEFAULT_PROXY_MODEL = 'gemini-3.1-flash-lite';
 
 type LlmPart = string | { text?: string; inlineData?: { mimeType: string; data: string } };
 
@@ -19,36 +19,6 @@ function toGeminiRestParts(parts: LlmPart[]) {
     }
     return { text: '' };
   });
-}
-
-function hasMedia(parts: ReturnType<typeof normalizeParts>) {
-  return parts.some((part) => !!part.inlineData);
-}
-
-function buildMessages(parts: ReturnType<typeof normalizeParts>) {
-  const blocks: Array<Record<string, string>> = [];
-  for (const part of parts) {
-    if (part.text) blocks.push({ type: 'text', text: part.text });
-    else if (part.inlineData) {
-      blocks.push({ type: 'image', mimeType: part.inlineData.mimeType, data: part.inlineData.data });
-    }
-  }
-  const content = blocks.length === 1 && blocks[0].type === 'text' ? blocks[0].text! : blocks;
-  return [{ role: 'user', content }];
-}
-
-function buildMultimodalMessages(parts: ReturnType<typeof normalizeParts>) {
-  const blocks: Array<Record<string, unknown>> = [];
-  for (const part of parts) {
-    if (part.text) blocks.push({ type: 'text', text: part.text });
-    else if (part.inlineData) {
-      blocks.push({
-        type: 'inline_data',
-        inline_data: { mime_type: part.inlineData.mimeType, data: part.inlineData.data },
-      });
-    }
-  }
-  return [{ role: 'user', content: blocks }];
 }
 
 function extractProxyText(data: Record<string, unknown>): string {
@@ -70,6 +40,8 @@ function extractProxyError(data: Record<string, unknown>, status: number): strin
   if (error && typeof error === 'object') {
     const message = (error as { message?: string }).message;
     if (message) return message;
+    const code = (error as { code?: string }).code;
+    if (code && message) return `${code}: ${message}`;
   }
   return `Study LLM 프록시 오류 (${status})`;
 }
@@ -80,6 +52,80 @@ function parseQuotaError(message: string): number | null {
   const retryMatch =
     message.match(/retry in ([\d.]+)s/i) ?? message.match(/"retryDelay":\s*"?(\d+)/i);
   return retryMatch ? Math.min(120, Math.ceil(parseFloat(retryMatch[1]))) : 30;
+}
+
+function buildProxyBodies(parts: LlmPart[], jsonMode: boolean): Record<string, unknown>[] {
+  const normalized = normalizeParts(parts);
+  const model = (process.env.STUDY_LLM_MODEL?.trim() || DEFAULT_PROXY_MODEL);
+  const jsonPrefix = jsonMode ? '반드시 유효한 JSON만 출력하세요.\n\n' : '';
+
+  const textChunks: string[] = [];
+  const imageUrls: string[] = [];
+
+  for (const part of normalized) {
+    if (part.text) textChunks.push(part.text);
+    if (part.inlineData) {
+      imageUrls.push(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+    }
+  }
+
+  const combinedText = `${jsonPrefix}${textChunks.join('\n\n')}`.trim();
+  const bodies: Record<string, unknown>[] = [];
+
+  if (imageUrls.length === 0) {
+    bodies.push({
+      provider: 'google',
+      model,
+      messages: [{ role: 'user', content: combinedText }],
+      maxOutputTokens: 8192,
+    });
+    return bodies;
+  }
+
+  // Study 프록시: messages + image_url (OpenAI 스타일)
+  bodies.push({
+    provider: 'google',
+    model,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: combinedText },
+          ...imageUrls.map((url) => ({
+            type: 'image_url',
+            image_url: { url },
+          })),
+        ],
+      },
+    ],
+    maxOutputTokens: 8192,
+  });
+
+  // fallback: inline_data 블록
+  bodies.push({
+    provider: 'google',
+    model,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: combinedText },
+          ...normalized
+            .filter((part) => part.inlineData)
+            .map((part) => ({
+              type: 'inline_data',
+              inline_data: {
+                mime_type: part.inlineData!.mimeType,
+                data: part.inlineData!.data,
+              },
+            })),
+        ],
+      },
+    ],
+    maxOutputTokens: 8192,
+  });
+
+  return bodies;
 }
 
 async function callProxy(baseUrl: string, token: string, body: Record<string, unknown>) {
@@ -105,20 +151,12 @@ async function generateViaStudyProxy(parts: LlmPart[], jsonMode: boolean): Promi
   }
 
   const baseUrl = (process.env.STUDY_LLM_API_URL?.trim() || DEFAULT_PROXY_URL).replace(/\/$/, '');
-  const model = (process.env.STUDY_LLM_MODEL?.trim() || DEFAULT_PROXY_MODEL);
-  const normalized = normalizeParts(parts);
-  const media = hasMedia(normalized);
-  const baseBody: Record<string, unknown> = { provider: 'google', model, maxOutputTokens: 8192 };
-  if (jsonMode) baseBody.generationConfig = { responseMimeType: 'application/json' };
-
-  const attempts = media
-    ? [{ ...baseBody, parts: normalized }, { ...baseBody, messages: buildMultimodalMessages(normalized) }]
-    : [{ ...baseBody, messages: buildMessages(normalized) }];
+  const bodies = buildProxyBodies(parts, jsonMode);
 
   let lastError = 'Study LLM 프록시 오류';
   let lastStatus = 500;
 
-  for (const body of attempts) {
+  for (const body of bodies) {
     const result = await callProxy(baseUrl, token, body);
     if (result.ok) {
       try {
@@ -129,13 +167,26 @@ async function generateViaStudyProxy(parts: LlmPart[], jsonMode: boolean): Promi
         continue;
       }
     }
+
     lastStatus = result.status;
     lastError = extractProxyError(result.data, result.status);
+
     if (result.status === 429) {
       return Response.json({ error: lastError, retryAfter: 30 }, { status: 429 });
     }
     if (result.status === 401 || result.status === 403) {
       return Response.json({ error: lastError }, { status: result.status });
+    }
+
+    const lower = lastError.toLowerCase();
+    if (lower.includes('model is not allowed')) {
+      return Response.json(
+        {
+          error:
+            `${lastError}. Vercel 환경변수 STUDY_LLM_MODEL을 gemini-3.1-flash-lite 로 설정해 주세요.`,
+        },
+        { status: 400 },
+      );
     }
   }
 
