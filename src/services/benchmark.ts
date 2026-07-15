@@ -10,6 +10,7 @@ import type {
 } from '../types';
 import { PLATFORM_LABELS } from '../types';
 import { detectDominantOrientation, ORIENTATION_LABELS } from '../utils/video';
+import { prepareFramesForApi } from '../utils/imageCompress';
 import { fetchApiStatus } from './apiClient';
 import {
   analyzeReferenceVideos,
@@ -117,8 +118,11 @@ export async function runBenchmarkPipeline(
   const formatLabel = ORIENTATION_LABELS[videoFormat];
   const targetThumbnail = imageDataUrls[0] ?? '';
 
+  onProgress?.('keywords', '분석 데이터 최적화 중...');
+  const apiImages = await prepareFramesForApi(imageDataUrls);
+
   onProgress?.('keywords', `${formatLabel} — 키워드 추출 중...`);
-  const keywords = await extractKeywords(imageDataUrls, videoFormat);
+  const keywords = await extractKeywords(apiImages, videoFormat);
 
   let trendingVideos: TrendingVideo[] = [];
   if (youtubeEnabled) {
@@ -182,7 +186,7 @@ export async function runBenchmarkPipeline(
 
   onProgress?.('compare', '멀티플랫폼 벤치마크 비교 및 리포트 생성 중...');
   const report = await generateBenchmarkReport(
-    imageDataUrls,
+    apiImages,
     preset,
     keywords,
     referenceAnalyses.slice(0, 5),

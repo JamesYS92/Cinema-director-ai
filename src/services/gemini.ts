@@ -18,6 +18,7 @@ import type {
 } from '../types';
 import { METRIC_LABELS, PLATFORM_LABELS } from '../types';
 import { fileToBase64, MAX_VIDEO_ANALYSIS_BYTES, formatFileSize } from '../utils/file';
+import { SERVER_VIDEO_UPLOAD_LIMIT } from '../utils/imageCompress';
 import { dataUrlToBase64 } from '../utils/storage';
 import { ORIENTATION_LABELS, ORIENTATION_REFERENCE_HINT } from '../utils/video';
 import { fetchThumbnailAsBase64 } from './youtube';
@@ -97,6 +98,11 @@ export async function analyzeVideoHolistic(
   videoFormat: VideoOrientation,
 ): Promise<VideoHolisticAnalysis> {
   if (!videoFile) return emptyVideoAnalysis('로컬 영상 파일이 없습니다.');
+  if (videoFile.size > SERVER_VIDEO_UPLOAD_LIMIT) {
+    return emptyVideoAnalysis(
+      `배포 서버 용량 제한으로 영상 전체 분석은 생략하고 컷보드로 분석합니다. (${formatFileSize(videoFile.size)})`,
+    );
+  }
   if (videoFile.size > MAX_VIDEO_ANALYSIS_BYTES) {
     return emptyVideoAnalysis(
       `영상 크기(${formatFileSize(videoFile.size)})가 15MB 제한을 초과하여 컷보드 분석으로 대체합니다.`,
