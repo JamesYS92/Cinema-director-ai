@@ -2,6 +2,7 @@ export interface ApiStatus {
   ready: boolean;
   gemini: boolean;
   youtube: boolean;
+  llmProvider?: 'study_proxy' | 'direct_gemini' | 'none';
   message: string;
 }
 

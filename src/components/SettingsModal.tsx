@@ -48,7 +48,8 @@ export function SettingsModal({ open, onClose, onSaved }: SettingsModalProps) {
             <Youtube size={16} />
             <p>
               Vercel 대시보드 → Project → <strong>Settings → Environment Variables</strong>에서
-              <code> GEMINI_API_KEY</code>, <code> YOUTUBE_API_KEY</code>를 등록하세요.
+              <code> STUDY_LLM_API_TOKEN</code>(권장) 또는 <code> GEMINI_API_KEY</code>,
+              <code> YOUTUBE_API_KEY</code>를 등록하세요.
             </p>
           </div>
 
@@ -64,7 +65,12 @@ export function SettingsModal({ open, onClose, onSaved }: SettingsModalProps) {
           {status && (
             <ul className="server-status-list">
               <li className={status.gemini ? 'ok' : 'missing'}>
-                Gemini API: {status.gemini ? '연결됨' : '미설정'}
+                AI API:{' '}
+                {status.llmProvider === 'study_proxy'
+                  ? 'Study LLM 프록시'
+                  : status.gemini
+                    ? 'Gemini 직접 연결'
+                    : '미설정'}
               </li>
               <li className={status.youtube ? 'ok' : 'missing'}>
                 YouTube API: {status.youtube ? '연결됨' : '미설정 (AI 추정 모드)'}
