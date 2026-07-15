@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { generateViaStudyProxy, isStudyProxyConfigured, type LlmPart } from './lib/studyLlmProxy';
+import { generateViaStudyProxy, isStudyProxyConfigured, type LlmPart } from './studyLlmProxy';
 
 function parseQuotaError(message: string): { retryAfter: number } | null {
   const lower = message.toLowerCase();
