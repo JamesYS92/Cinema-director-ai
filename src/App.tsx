@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Clapperboard,
   Settings,
@@ -15,6 +15,7 @@ import { CutBoard } from './components/CutBoard';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulationReport } from './components/SimulationReport';
 import { AnalysisHistory, CompareReport } from './components/AnalysisHistory';
+import { AnalysisStepper } from './components/AnalysisStepper';
 import { runBenchmarkPipeline } from './services/benchmark';
 import type {
   AnalysisPreset,
@@ -26,7 +27,7 @@ import type {
   VideoSourceType,
 } from './types';
 import { PRESET_DESCRIPTIONS, PRESET_LABELS } from './types';
-import { saveAnalysisRecord } from './utils/analysisHistory';
+import { saveAnalysisRecord, exportAnalysisRecord, updateAnalysisRecord } from './utils/analysisHistory';
 import { generateId } from './utils/storage';
 import { detectDominantOrientation } from './utils/video';
 import { fetchApiStatus } from './services/apiClient';
@@ -56,10 +57,13 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [report, setReport] = useState<AnalysisReport | null>(null);
+  const [savedRecord, setSavedRecord] = useState<SavedAnalysisRecord | null>(null);
   const [compareRecords, setCompareRecords] = useState<[SavedAnalysisRecord, SavedAnalysisRecord] | null>(null);
   const [savedLabel, setSavedLabel] = useState<string | undefined>();
   const [analyzing, setAnalyzing] = useState(false);
-  const [analysisStep, setAnalysisStep] = useState<string>('');
+  const [analysisStep, setAnalysisStep] = useState<AnalysisProgressStep | null>(null);
+  const [analysisMessage, setAnalysisMessage] = useState('');
+  const reportAnchorRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [serverReady, setServerReady] = useState(false);
   const [serverYoutube, setServerYoutube] = useState(false);
@@ -121,6 +125,7 @@ export default function App() {
   const handleVideoSourceChange = useCallback(() => {
     setFrames([]);
     setReport(null);
+    setSavedRecord(null);
     setCompareRecords(null);
     setSavedLabel(undefined);
     setError(null);
@@ -151,7 +156,8 @@ export default function App() {
     setAnalyzing(true);
     setError(null);
     setCompareRecords(null);
-    setAnalysisStep('분석 시작...');
+    setAnalysisStep('keywords');
+    setAnalysisMessage('분석 시작...');
     try {
       const result = await runBenchmarkPipeline(
         {
@@ -161,7 +167,10 @@ export default function App() {
           videoFile,
           videoTitle: videoFileName,
         },
-        (step, message) => setAnalysisStep(message || PROGRESS_MESSAGES[step]),
+        (step, message) => {
+          setAnalysisStep(step);
+          setAnalysisMessage(message || PROGRESS_MESSAGES[step]);
+        },
       );
 
       const title =
@@ -175,19 +184,65 @@ export default function App() {
         videoFormat: detectDominantOrientation(frames),
       });
 
-      setSavedLabel(`저장됨 · ${new Date(saved.savedAt).toLocaleTimeString('ko-KR')}`);
+      setSavedRecord(saved);
+      setSavedLabel(`자동 저장됨 · ${new Date(saved.savedAt).toLocaleTimeString('ko-KR')}`);
       setReport(result);
+      setAnalysisStep('done');
     } catch (err) {
       setError(err instanceof Error ? err.message : '분석 중 오류가 발생했습니다.');
     } finally {
       setAnalyzing(false);
-      setAnalysisStep('');
+      setAnalysisMessage('');
     }
+  };
+
+  useEffect(() => {
+    if (report && reportAnchorRef.current) {
+      reportAnchorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [report]);
+
+  const handleSaveReport = () => {
+    if (!report) return;
+    const defaultTitle =
+      savedRecord?.title ||
+      videoFileName.replace(/\.[^.]+$/, '') ||
+      report.benchmark.keywords.niche ||
+      '분석 결과';
+    const title = window.prompt('저장할 리포트 이름', defaultTitle)?.trim();
+    if (!title) return;
+
+    if (savedRecord) {
+      const updated = updateAnalysisRecord(savedRecord.id, { title, report });
+      if (updated) {
+        setSavedRecord(updated);
+        setSavedLabel(`저장됨 · ${new Date(updated.savedAt).toLocaleString('ko-KR')}`);
+      }
+      return;
+    }
+
+    const saved = saveAnalysisRecord(report, {
+      title,
+      thumbnail: frames[0]?.imageDataUrl ?? '',
+      videoFormat: frames.length > 0 ? detectDominantOrientation(frames) : 'landscape',
+    });
+    setSavedRecord(saved);
+    setSavedLabel(`저장됨 · ${new Date(saved.savedAt).toLocaleString('ko-KR')}`);
+  };
+
+  const handleExportReport = () => {
+    if (!savedRecord) return;
+    exportAnalysisRecord(savedRecord);
+  };
+
+  const handleScrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleLoadHistory = (record: SavedAnalysisRecord) => {
     setCompareRecords(null);
     setReport(record.report);
+    setSavedRecord(record);
     setSavedLabel(`불러옴 · ${new Date(record.savedAt).toLocaleString('ko-KR')}`);
   };
 
@@ -237,7 +292,7 @@ export default function App() {
       </header>
 
       <main className="dashboard">
-        <div className="dashboard-left">
+        <div className="dashboard-workspace">
           <VideoPlayer
             sourceType={sourceType}
             onSourceTypeChange={handleSourceTypeChange}
@@ -267,6 +322,9 @@ export default function App() {
 
             <div className="analyze-bar">
               {error && <p className="error-msg">{error}</p>}
+              {analyzing && (
+                <AnalysisStepper currentStep={analysisStep} message={analysisMessage} />
+              )}
               <button
                 className="btn primary analyze-btn"
                 onClick={handleAnalyze}
@@ -275,7 +333,7 @@ export default function App() {
                 {analyzing ? (
                   <>
                     <Loader2 size={18} className="spin" />
-                    {analysisStep || 'AI 분석 중...'}
+                    {analysisMessage || 'AI 분석 중...'}
                   </>
                 ) : (
                   <>
@@ -295,19 +353,26 @@ export default function App() {
         </div>
 
         {compareRecords && (
-          <CompareReport
-            recordA={compareRecords[0]}
-            recordB={compareRecords[1]}
-            onClose={() => setCompareRecords(null)}
-          />
+          <div className="report-area">
+            <CompareReport
+              recordA={compareRecords[0]}
+              recordB={compareRecords[1]}
+              onClose={() => setCompareRecords(null)}
+            />
+          </div>
         )}
 
         {report && !compareRecords && (
-          <SimulationReport
-            report={report}
-            onClose={() => setReport(null)}
-            savedLabel={savedLabel}
-          />
+          <div className="report-area" ref={reportAnchorRef}>
+            <SimulationReport
+              report={report}
+              savedLabel={savedLabel}
+              savedRecord={savedRecord}
+              onSave={handleSaveReport}
+              onExport={handleExportReport}
+              onScrollTop={handleScrollToTop}
+            />
+          </div>
         )}
       </main>
 

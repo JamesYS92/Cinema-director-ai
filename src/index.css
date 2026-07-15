@@ -37,7 +37,7 @@
 }
 
 html, body, #root {
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
@@ -149,9 +149,19 @@ body {
 
 .dashboard {
   display: flex;
+  flex-direction: column;
   flex: 1;
-  gap: 0;
-  overflow: hidden;
+  align-items: stretch;
+}
+
+.dashboard-workspace {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 32px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 .dashboard-left {
@@ -162,6 +172,72 @@ body {
   gap: 20px;
   overflow-y: auto;
   min-width: 0;
+}
+
+.report-area {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 8px 32px 56px;
+}
+
+.analysis-stepper {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.analysis-stepper-track {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.analysis-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.analysis-step.active {
+  color: var(--accent-blue);
+}
+
+.analysis-step.done {
+  color: var(--accent-green);
+}
+
+.analysis-step-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.analysis-step.active .analysis-step-dot {
+  border-color: rgba(96, 165, 250, 0.45);
+  background: rgba(96, 165, 250, 0.12);
+}
+
+.analysis-step.done .analysis-step-dot {
+  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.analysis-stepper-msg {
+  margin: 10px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
 }
 
 .action-card {
@@ -830,15 +906,59 @@ body {
 /* ── Report Panel ── */
 
 .report-panel {
-  width: 480px;
-  min-width: 400px;
+  width: 100%;
+  min-width: unset;
   background: var(--bg-secondary);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  border-left: 1px solid var(--border);
-  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: visible;
   display: flex;
   flex-direction: column;
+}
+
+.report-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.report-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 69px;
+  z-index: 9;
+  background: rgba(12, 12, 18, 0.92);
+  backdrop-filter: var(--glass-blur);
+}
+
+.report-tab {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.report-tab:hover {
+  border-color: rgba(168, 85, 247, 0.35);
+  color: var(--text-primary);
+}
+
+.report-tab.active {
+  border-color: rgba(168, 85, 247, 0.55);
+  background: rgba(168, 85, 247, 0.14);
+  color: #fff;
 }
 
 .report-header {
@@ -2298,15 +2418,14 @@ body {
 /* ── Responsive ── */
 
 @media (max-width: 900px) {
-  .dashboard {
-    flex-direction: column;
+  .dashboard-workspace,
+  .report-area {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 
-  .report-panel {
-    width: 100%;
-    min-width: unset;
-    border-left: none;
-    border-top: 1px solid var(--border);
+  .report-tabs {
+    top: 60px;
   }
 
   .target-review-grid {
@@ -2340,8 +2459,8 @@ body {
     padding: 12px 16px;
   }
 
-  .dashboard-left {
-    padding: 14px 16px;
+  .dashboard-workspace {
+    padding: 14px 16px 8px;
   }
 
   .brand h1 {

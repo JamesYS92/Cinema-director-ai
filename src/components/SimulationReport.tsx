@@ -37,8 +37,11 @@ import {
   Play,
   Flame,
   TrendingUp as TrendingUpIcon,
+  Save,
+  Download,
+  ChevronUp,
 } from 'lucide-react';
-import type { AnalysisReport, BenchmarkGap, ReferenceAnalysis, TrendBadge, TrendingVideo } from '../types';
+import type { AnalysisReport, BenchmarkGap, ReferenceAnalysis, SavedAnalysisRecord, TrendBadge, TrendingVideo } from '../types';
 import { formatViews } from '../utils/storage';
 import { getEmbedUrl, getReferenceLink, isEstimatedReference } from '../utils/referenceLinks';
 import { ORIENTATION_LABELS, ORIENTATION_REFERENCE_HINT } from '../utils/video';
@@ -60,9 +63,23 @@ function formatPublishedDate(iso?: string): string | null {
 
 interface SimulationReportProps {
   report: AnalysisReport;
-  onClose: () => void;
   savedLabel?: string;
+  savedRecord?: SavedAnalysisRecord | null;
+  onSave?: () => void;
+  onExport?: () => void;
+  onScrollTop?: () => void;
 }
+
+type ReportTabId = 'overview' | 'keywords' | 'my-video' | 'references' | 'benchmark' | 'strategy';
+
+const REPORT_TABS: { id: ReportTabId; label: string }[] = [
+  { id: 'overview', label: '요약' },
+  { id: 'keywords', label: '키워드·유행' },
+  { id: 'my-video', label: '내 영상' },
+  { id: 'references', label: '레퍼런스' },
+  { id: 'benchmark', label: '벤치마크' },
+  { id: 'strategy', label: '실행 전략' },
+];
 
 const PLATFORM_ICONS: Record<string, ReactNode> = {
   youtube: <Youtube size={18} />,
@@ -307,7 +324,15 @@ function GapBar({ gap }: { gap: BenchmarkGap }) {
   );
 }
 
-export function SimulationReport({ report, onClose, savedLabel }: SimulationReportProps) {
+export function SimulationReport({
+  report,
+  savedLabel,
+  savedRecord,
+  onSave,
+  onExport,
+  onScrollTop,
+}: SimulationReportProps) {
+  const [activeTab, setActiveTab] = useState<ReportTabId>('overview');
   const { benchmark } = report;
   const chartData = report.platformScores.map((p) => ({
     name: p.label.split(' ')[0],
@@ -332,7 +357,7 @@ export function SimulationReport({ report, onClose, savedLabel }: SimulationRepo
   const trendingVideos = benchmark.trendingVideos ?? [];
 
   return (
-    <div className="report-panel">
+    <div className="report-panel" id="analysis-report">
       <div className="report-header">
         <div>
           <h2>
@@ -344,13 +369,130 @@ export function SimulationReport({ report, onClose, savedLabel }: SimulationRepo
           </p>
           {savedLabel && <span className="saved-badge">{savedLabel}</span>}
         </div>
-        <button className="btn ghost" onClick={onClose}>
-          닫기
-        </button>
+        <div className="report-header-actions">
+          {onSave && (
+            <button type="button" className="btn secondary" onClick={onSave} title="히스토리에 저장">
+              <Save size={15} />
+              저장
+            </button>
+          )}
+          {onExport && savedRecord && (
+            <button type="button" className="btn secondary" onClick={onExport} title="JSON 파일로 내보내기">
+              <Download size={15} />
+              JSON
+            </button>
+          )}
+          {onScrollTop && (
+            <button type="button" className="btn ghost" onClick={onScrollTop}>
+              <ChevronUp size={16} />
+              상단
+            </button>
+          )}
+        </div>
       </div>
 
+      <nav className="report-tabs" aria-label="리포트 섹션">
+        {REPORT_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`report-tab ${activeTab === tab.id ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
       <div className="report-body">
-        {/* Keywords */}
+        {activeTab === 'overview' && (
+          <>
+        {/* Viral Index */}
+        <section className="report-section viral-section">
+          <ScoreGauge score={report.viralIndex} label="조회 잠재력" />
+          <div className="viral-bar-wrap">
+            <div className="viral-bar">
+              <div className="viral-bar-fill" style={{ width: `${report.viralIndex}%` }} />
+            </div>
+            <div className="viral-bar-labels">
+              <span>0</span>
+              <span>종합 조회 잠재력</span>
+              <span>100</span>
+            </div>
+          </div>
+        </section>
+
+        {/* View Potential */}
+        <section className="report-section view-potential-section">
+          <h3>데이터 기반 조회수 예측</h3>
+          <div className="view-potential-card">
+            <div className="view-potential-main">
+              <span className="view-range">
+                {formatViews(benchmark.viewPotential.realisticViews.min)} – {formatViews(benchmark.viewPotential.realisticViews.max)}
+              </span>
+              <span className="view-percentile">상위 {100 - benchmark.viewPotential.percentile}% 예상</span>
+            </div>
+            <p className="view-reasoning">{benchmark.viewPotential.reasoning}</p>
+          </div>
+        </section>
+
+        {/* Platform Scores */}
+        <section className="report-section">
+          <h3>플랫폼별 적합도</h3>
+          <div className="platform-cards">
+            {report.platformScores.map((p) => (
+              <div key={p.platform} className="platform-card">
+                <div className="platform-card-header">
+                  {PLATFORM_ICONS[p.platform]}
+                  <span>{p.label}</span>
+                  <strong style={{ color: PLATFORM_COLORS[p.platform] }}>{p.fitScore}</strong>
+                </div>
+                <div className="platform-metrics">
+                  <div className="metric">
+                    <span>예상 조회수</span>
+                    <strong>
+                      {formatViews(p.estimatedViews.min)} – {formatViews(p.estimatedViews.max)}
+                    </strong>
+                  </div>
+                  <div className="metric">
+                    <span>AVD</span>
+                    <strong>{p.avd}%</strong>
+                  </div>
+                  <div className="metric">
+                    <span>CTR</span>
+                    <strong>{p.ctr}%</strong>
+                  </div>
+                </div>
+                <div className="fit-bar">
+                  <div
+                    className="fit-bar-fill"
+                    style={{ width: `${p.fitScore}%`, background: PLATFORM_COLORS[p.platform] }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="chart-wrap">
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={chartData} barSize={48}>
+                <XAxis dataKey="name" tick={{ fill: '#888', fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis domain={[0, 100]} tick={{ fill: '#888', fontSize: 12 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 8, color: '#fff' }} />
+                <Bar dataKey="fitScore" radius={[6, 6, 0, 0]}>
+                  {chartData.map((entry) => (
+                    <Cell key={entry.platform} fill={PLATFORM_COLORS[entry.platform]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+          </>
+        )}
+
+        {activeTab === 'keywords' && (
+          <>
         <section className="report-section">
           <h3>
             <Search size={18} />
@@ -398,7 +540,11 @@ export function SimulationReport({ report, onClose, savedLabel }: SimulationRepo
             </p>
           )}
         </section>
+          </>
+        )}
 
+        {activeTab === 'my-video' && (
+          <>
         {/* Target Video Review - 장점/단점 */}
         <section className="report-section target-review-section">
           <h3>내 영상 분석</h3>
@@ -528,7 +674,11 @@ export function SimulationReport({ report, onClose, savedLabel }: SimulationRepo
             </>
           )}
         </section>
+          </>
+        )}
 
+        {activeTab === 'references' && (
+          <>
         {/* Platform Benchmarks */}
         <section className="report-section">
           <h3>
@@ -610,7 +760,11 @@ export function SimulationReport({ report, onClose, savedLabel }: SimulationRepo
             </details>
           )}
         </section>
+          </>
+        )}
 
+        {activeTab === 'benchmark' && (
+          <>
         {/* Gap Analysis */}
         <section className="report-section">
           <h3>
@@ -638,89 +792,11 @@ export function SimulationReport({ report, onClose, savedLabel }: SimulationRepo
             </ResponsiveContainer>
           </div>
         </section>
+          </>
+        )}
 
-        {/* View Potential */}
-        <section className="report-section view-potential-section">
-          <h3>데이터 기반 조회수 예측</h3>
-          <div className="view-potential-card">
-            <div className="view-potential-main">
-              <span className="view-range">
-                {formatViews(benchmark.viewPotential.realisticViews.min)} – {formatViews(benchmark.viewPotential.realisticViews.max)}
-              </span>
-              <span className="view-percentile">상위 {100 - benchmark.viewPotential.percentile}% 예상</span>
-            </div>
-            <p className="view-reasoning">{benchmark.viewPotential.reasoning}</p>
-          </div>
-        </section>
-
-        {/* Viral Index */}
-        <section className="report-section viral-section">
-          <ScoreGauge score={report.viralIndex} label="조회 잠재력" />
-          <div className="viral-bar-wrap">
-            <div className="viral-bar">
-              <div className="viral-bar-fill" style={{ width: `${report.viralIndex}%` }} />
-            </div>
-            <div className="viral-bar-labels">
-              <span>0</span>
-              <span>종합 조회 잠재력</span>
-              <span>100</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Platform Scores */}
-        <section className="report-section">
-          <h3>플랫폼별 적합도</h3>
-          <div className="platform-cards">
-            {report.platformScores.map((p) => (
-              <div key={p.platform} className="platform-card">
-                <div className="platform-card-header">
-                  {PLATFORM_ICONS[p.platform]}
-                  <span>{p.label}</span>
-                  <strong style={{ color: PLATFORM_COLORS[p.platform] }}>{p.fitScore}</strong>
-                </div>
-                <div className="platform-metrics">
-                  <div className="metric">
-                    <span>예상 조회수</span>
-                    <strong>
-                      {formatViews(p.estimatedViews.min)} – {formatViews(p.estimatedViews.max)}
-                    </strong>
-                  </div>
-                  <div className="metric">
-                    <span>AVD</span>
-                    <strong>{p.avd}%</strong>
-                  </div>
-                  <div className="metric">
-                    <span>CTR</span>
-                    <strong>{p.ctr}%</strong>
-                  </div>
-                </div>
-                <div className="fit-bar">
-                  <div
-                    className="fit-bar-fill"
-                    style={{ width: `${p.fitScore}%`, background: PLATFORM_COLORS[p.platform] }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={chartData} barSize={48}>
-                <XAxis dataKey="name" tick={{ fill: '#888', fontSize: 12 }} axisLine={false} tickLine={false} />
-                <YAxis domain={[0, 100]} tick={{ fill: '#888', fontSize: 12 }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ background: '#1a1a2e', border: '1px solid #333', borderRadius: 8, color: '#fff' }} />
-                <Bar dataKey="fitScore" radius={[6, 6, 0, 0]}>
-                  {chartData.map((entry) => (
-                    <Cell key={entry.platform} fill={PLATFORM_COLORS[entry.platform]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-
+        {activeTab === 'strategy' && (
+          <>
         {/* AI Director Feedback */}
         <section className="report-section">
           <h3>
@@ -766,6 +842,8 @@ export function SimulationReport({ report, onClose, savedLabel }: SimulationRepo
             </ul>
           </div>
         </section>
+          </>
+        )}
       </div>
     </div>
   );
