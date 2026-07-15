@@ -10,6 +10,7 @@ import {
   VolumeX,
   Layers,
   Loader2,
+  ExternalLink,
 } from 'lucide-react';
 import type { CaptureResult, VideoSourceType } from '../types';
 import { extractYouTubeId, formatTimestamp, isDirectVideoUrl } from '../utils/storage';
@@ -45,7 +46,12 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
   const [autoCapturing, setAutoCapturing] = useState(false);
   const [autoCutCount, setAutoCutCount] = useState<number | null>(null);
   const [videoOrientation, setVideoOrientation] = useState<VideoOrientation>('landscape');
-  const [youtubeMeta, setYoutubeMeta] = useState<{ title: string; duration: number } | null>(null);
+  const [youtubeMeta, setYoutubeMeta] = useState<{
+    title: string;
+    duration: number;
+    thumbnailUrl: string;
+    channelTitle?: string;
+  } | null>(null);
   const [youtubeLoading, setYoutubeLoading] = useState(false);
   const [youtubeError, setYoutubeError] = useState<string | null>(null);
   const [youtubeWarning, setYoutubeWarning] = useState<string | null>(null);
@@ -97,7 +103,7 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
   };
 
   const handleWebLoad = async () => {
-    const trimmed = webUrl.trim();
+    const trimmed = webUrl.trim().replace(/^undefined/i, '');
     if (!trimmed) return;
 
     const ytId = extractYouTubeId(trimmed);
@@ -113,7 +119,12 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
 
       try {
         const { meta } = await extractYouTubeStoryboardFrames(ytId, 1);
-        setYoutubeMeta({ title: meta.title, duration: meta.duration });
+        setYoutubeMeta({
+          title: meta.title,
+          duration: meta.duration,
+          thumbnailUrl: meta.thumbnailUrl,
+          channelTitle: meta.channelTitle,
+        });
         onVideoFile(null, meta.title);
         if (meta.orientation) setVideoOrientation(meta.orientation);
         await handleYouTubeAutoCapture(30, ytId);
@@ -333,13 +344,27 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
 
       <div className={`player-area ${videoOrientation}`}>
         {sourceType === 'web' && youtubeId ? (
-          <iframe
-            className="youtube-embed"
-            src={`https://www.youtube.com/embed/${youtubeId}?enablejsapi=1`}
-            title="YouTube video"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
+          <div className="youtube-preview">
+            <img
+              className="youtube-preview-thumb"
+              src={youtubeMeta?.thumbnailUrl ?? `https://i.ytimg.com/vi/${youtubeId}/hqdefault.jpg`}
+              alt={youtubeMeta?.title ?? 'YouTube 영상'}
+            />
+            <div className="youtube-preview-overlay">
+              <p className="youtube-preview-note">
+                외부 사이트에서는 YouTube 로그인 없이 스토리보드 프레임으로 분석합니다.
+              </p>
+              <a
+                className="btn secondary youtube-open-btn"
+                href={`https://www.youtube.com/watch?v=${youtubeId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <ExternalLink size={15} />
+                YouTube에서 보기
+              </a>
+            </div>
+          </div>
         ) : activeVideoUrl ? (
           <video
             ref={videoRef}
