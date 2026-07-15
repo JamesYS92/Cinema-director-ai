@@ -287,6 +287,7 @@ export async function resolveEstimatedReference(
   video: ReferenceVideo,
   orientation: VideoOrientation,
   platform?: PlatformId,
+  fallbackQuery?: string,
 ): Promise<ReferenceVideo> {
   if (!video.videoId.startsWith('estimated-')) {
     return enrichReferenceVideo(video);
@@ -336,6 +337,30 @@ export async function resolveEstimatedReference(
 
     const match = findBestTitleMatch(pool, video.title, video.channelTitle);
     if (match) return enrichReferenceVideo(match);
+
+    const nicheQuery = fallbackQuery?.trim();
+    if (nicheQuery) {
+      const { references } = await searchPlatformReferences(
+        apiKey,
+        nicheQuery,
+        searchOrientation,
+        inferredPlatform,
+        5,
+      );
+      if (references[0]) return enrichReferenceVideo(references[0]);
+
+      collect(await searchTopVideos(apiKey, nicheQuery.slice(0, 100), {
+        orientation: searchOrientation,
+        maxResults: 5,
+      }));
+      if (pool.length > 0) {
+        return enrichReferenceVideo(pool.sort((a, b) => b.viewCount - a.viewCount)[0]!);
+      }
+    }
+
+    if (pool.length > 0) {
+      return enrichReferenceVideo(pool.sort((a, b) => b.viewCount - a.viewCount)[0]!);
+    }
   } catch {
     /* keep estimated */
   }
