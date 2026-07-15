@@ -34,16 +34,16 @@ import {
   Smartphone,
   Clapperboard,
   Video,
-  Play,
   Flame,
   TrendingUp as TrendingUpIcon,
-  Save,
+  FolderKanban,
   Download,
   ChevronUp,
 } from 'lucide-react';
 import type { AnalysisReport, BenchmarkGap, ReferenceAnalysis, SavedAnalysisRecord, TrendBadge, TrendingVideo } from '../types';
 import { formatViews } from '../utils/storage';
-import { getEmbedUrl, getReferenceLink, isEstimatedReference } from '../utils/referenceLinks';
+import type { ReferenceVideo } from '../types';
+import { getReferenceLinkPair, isEstimatedReference } from '../utils/referenceLinks';
 import { ORIENTATION_LABELS, ORIENTATION_REFERENCE_HINT } from '../utils/video';
 
 const SHOWCASE_COUNT = 3;
@@ -128,181 +128,153 @@ function avgMetrics(metrics: ReferenceAnalysis['metrics']): number {
   );
 }
 
-function ReferenceShowcaseCard({ reference, rank }: { reference: ReferenceAnalysis; rank: number }) {
-  const [playing, setPlaying] = useState(false);
+function ReferenceLinkActions({
+  video,
+  similarQuery,
+  compact = false,
+}: {
+  video: ReferenceVideo;
+  similarQuery?: string;
+  compact?: boolean;
+}) {
+  const links = getReferenceLinkPair(video, similarQuery);
+
+  return (
+    <div className={`ref-link-actions ${compact ? 'compact' : ''}`}>
+      {links.watch && (
+        <a
+          href={links.watch.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`ref-open-link watch ${links.watch.isSearch ? 'search' : ''}`}
+          title={links.watch.label}
+        >
+          {links.watch.isSearch ? <Search size={14} /> : <Youtube size={14} />}
+          <span>{links.watch.label}</span>
+          <ExternalLink size={12} />
+        </a>
+      )}
+      <a
+        href={links.similar.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="ref-open-link search"
+        title={links.similar.label}
+      >
+        <Search size={14} />
+        <span>{links.similar.label}</span>
+        <ExternalLink size={12} />
+      </a>
+    </div>
+  );
+}
+
+function ReferenceShowcaseCard({
+  reference,
+  rank,
+  similarQuery,
+}: {
+  reference: ReferenceAnalysis;
+  rank: number;
+  similarQuery?: string;
+}) {
   const isEstimated = isEstimatedReference(reference.video.videoId);
   const hasThumbnail = !!reference.video.thumbnailUrl;
   const score = avgMetrics(reference.metrics);
-  const link = getReferenceLink(reference.video);
+  const links = getReferenceLinkPair(reference.video, similarQuery);
+  const primaryHref = links.watch?.href ?? links.similar.href;
+  const primaryLabel = links.watch?.label ?? links.similar.label;
 
-  const card = (
+  return (
     <div className="ref-showcase-card">
-      <div className="ref-showcase-thumb">
-        {playing && link.canEmbed ? (
-          <iframe
-            className="ref-showcase-embed"
-            src={getEmbedUrl(reference.video.videoId)}
-            title={reference.video.title}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
-        ) : hasThumbnail ? (
-          <>
+      <a
+        href={primaryHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="ref-showcase-thumb-link"
+        title={primaryLabel}
+      >
+        <div className="ref-showcase-thumb">
+          {hasThumbnail ? (
             <img src={reference.video.thumbnailUrl} alt={reference.video.title} loading="lazy" />
-            {link.canEmbed && (
-              <button
-                type="button"
-                className="ref-play-btn"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setPlaying(true);
-                }}
-                aria-label="영상 재생"
-              >
-                <Play size={22} fill="currentColor" />
-              </button>
-            )}
-          </>
-        ) : (
-          <div className="ref-showcase-placeholder">
-            <Film size={28} strokeWidth={1.2} />
-            <span>{isEstimated ? 'AI 추정 레퍼런스' : '썸네일 없음'}</span>
-          </div>
-        )}
-        <span className="ref-showcase-rank">#{rank}</span>
-        <span className="ref-showcase-score">{score} 기획점</span>
-        {isEstimated && (
-          <span className="ref-showcase-est-badge">AI 추정</span>
-        )}
-      </div>
+          ) : (
+            <div className="ref-showcase-placeholder">
+              <Film size={28} strokeWidth={1.2} />
+              <span>{isEstimated ? 'AI 추정 레퍼런스' : '썸네일 없음'}</span>
+            </div>
+          )}
+          <span className="ref-showcase-rank">#{rank}</span>
+          <span className="ref-showcase-score">{score} 기획점</span>
+          {isEstimated && <span className="ref-showcase-est-badge">AI 추정</span>}
+        </div>
+      </a>
       <div className="ref-showcase-body">
-        <strong title={reference.video.title}>{reference.video.title}</strong>
+        <a
+          href={primaryHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="ref-title-link"
+          title={reference.video.title}
+        >
+          <strong>{reference.video.title}</strong>
+        </a>
         <span className="ref-showcase-meta">
           {reference.video.channelTitle} · {formatViews(reference.video.viewCount)} views
         </span>
         <p>{reference.summary}</p>
-      </div>
-      <div className={`ref-showcase-footer ${link.isSearch ? 'search' : ''}`}>
-        {link.isSearch ? <Search size={14} /> : <Youtube size={14} />}
-        <span>{link.label}</span>
-        <ExternalLink size={12} />
+        <ReferenceLinkActions video={reference.video} similarQuery={similarQuery} />
       </div>
     </div>
   );
-
-  if (playing && link.canEmbed) {
-    return (
-      <div className="ref-showcase-wrap">
-        {card}
-        <a
-          href={link.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="ref-showcase-external"
-        >
-          YouTube에서 열기
-        </a>
-      </div>
-    );
-  }
-
-  return (
-    <a
-      href={link.href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="ref-showcase-link"
-      onClick={(e) => {
-        if (link.canEmbed && hasThumbnail && !playing) {
-          e.preventDefault();
-          setPlaying(true);
-        }
-      }}
-    >
-      {card}
-    </a>
-  );
 }
 
-function TrendingVideoCard({ video }: { video: TrendingVideo }) {
-  const [playing, setPlaying] = useState(false);
+function TrendingVideoCard({ video, similarQuery }: { video: TrendingVideo; similarQuery?: string }) {
   const published = formatPublishedDate(video.publishedAt);
   const watchUrl = `https://www.youtube.com/watch?v=${video.videoId}`;
+  const similarUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(
+    similarQuery?.trim() || video.matchedQuery || video.title,
+  )}`;
 
-  const card = (
+  return (
     <div className="trending-card">
-      <div className="trending-thumb">
-        {playing ? (
-          <iframe
-            className="ref-showcase-embed"
-            src={getEmbedUrl(video.videoId)}
-            title={video.title}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
-        ) : (
-          <>
-            <img src={video.thumbnailUrl} alt={video.title} loading="lazy" />
-            <button
-              type="button"
-              className="ref-play-btn"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setPlaying(true);
-              }}
-              aria-label="영상 재생"
-            >
-              <Play size={22} fill="currentColor" />
-            </button>
-          </>
-        )}
-        <span className={`trending-badge ${video.trendBadge}`}>
-          {video.trendBadge === 'hot' ? <Flame size={12} /> : <TrendingUpIcon size={12} />}
-          {TREND_BADGE_LABELS[video.trendBadge]}
-        </span>
-      </div>
+      <a
+        href={watchUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="ref-showcase-thumb-link"
+        title="YouTube에서 보기"
+      >
+        <div className="trending-thumb">
+          <img src={video.thumbnailUrl} alt={video.title} loading="lazy" />
+          <span className={`trending-badge ${video.trendBadge}`}>
+            {video.trendBadge === 'hot' ? <Flame size={12} /> : <TrendingUpIcon size={12} />}
+            {TREND_BADGE_LABELS[video.trendBadge]}
+          </span>
+        </div>
+      </a>
       <div className="trending-body">
-        <strong title={video.title}>{video.title}</strong>
+        <a href={watchUrl} target="_blank" rel="noopener noreferrer" className="ref-title-link">
+          <strong title={video.title}>{video.title}</strong>
+        </a>
         <span className="trending-meta">
           {video.channelTitle} · {formatViews(video.viewCount)} views
           {published ? ` · ${published}` : ''}
         </span>
         <span className="trending-query">검색: {video.matchedQuery}</span>
-      </div>
-      <div className="ref-showcase-footer">
-        <Youtube size={14} />
-        <span>YouTube에서 보기</span>
-        <ExternalLink size={12} />
+        <div className="ref-link-actions">
+          <a href={watchUrl} target="_blank" rel="noopener noreferrer" className="ref-open-link watch">
+            <Youtube size={14} />
+            <span>레퍼런스 영상 보기</span>
+            <ExternalLink size={12} />
+          </a>
+          <a href={similarUrl} target="_blank" rel="noopener noreferrer" className="ref-open-link search">
+            <Search size={14} />
+            <span>유사 영상 검색</span>
+            <ExternalLink size={12} />
+          </a>
+        </div>
       </div>
     </div>
-  );
-
-  if (playing) {
-    return (
-      <div className="ref-showcase-wrap">
-        {card}
-        <a href={watchUrl} target="_blank" rel="noopener noreferrer" className="ref-showcase-external">
-          YouTube에서 열기
-        </a>
-      </div>
-    );
-  }
-
-  return (
-    <a
-      href={watchUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="ref-showcase-link"
-      onClick={(e) => {
-        e.preventDefault();
-        setPlaying(true);
-      }}
-    >
-      {card}
-    </a>
   );
 }
 
@@ -355,6 +327,7 @@ export function SimulationReport({
   const formatLabel = ORIENTATION_LABELS[videoFormat];
   const topRef = showcaseRefs[0];
   const trendingVideos = benchmark.trendingVideos ?? [];
+  const similarQuery = benchmark.keywords.searchQuery || benchmark.keywords.niche;
 
   return (
     <div className="report-panel" id="analysis-report">
@@ -367,17 +340,17 @@ export function SimulationReport({
           <p>
             {isRealData ? '멀티플랫폼 실데이터' : 'AI 추정'} + 영상 단위 분석 리포트
           </p>
-          {savedLabel && <span className="saved-badge">{savedLabel}</span>}
+          {savedLabel && <span className="project-badge">{savedLabel}</span>}
         </div>
         <div className="report-header-actions">
           {onSave && (
-            <button type="button" className="btn secondary" onClick={onSave} title="히스토리에 저장">
-              <Save size={15} />
-              저장
+            <button type="button" className="btn secondary" onClick={onSave} title="프로젝트로 저장">
+              <FolderKanban size={15} />
+              프로젝트 저장
             </button>
           )}
           {onExport && savedRecord && (
-            <button type="button" className="btn secondary" onClick={onExport} title="JSON 파일로 내보내기">
+            <button type="button" className="btn secondary" onClick={onExport} title="프로젝트 JSON 내보내기">
               <Download size={15} />
               JSON
             </button>
@@ -526,11 +499,11 @@ export function SimulationReport({
             <>
               <p className="ref-showcase-desc">
                 업로드 영상 키워드로 YouTube에서 지금 조회가 붙는 영상 {trendingVideos.length}개를 찾았습니다.
-                썸네일을 클릭하면 재생되고, 링크로 YouTube에서 바로 열 수 있습니다.
+                썸네일·제목·버튼을 클릭하면 YouTube에서 바로 볼 수 있습니다.
               </p>
               <div className="trending-grid">
                 {trendingVideos.map((video) => (
-                  <TrendingVideoCard key={video.videoId} video={video} />
+                  <TrendingVideoCard key={video.videoId} video={video} similarQuery={similarQuery} />
                 ))}
               </div>
             </>
@@ -576,7 +549,10 @@ export function SimulationReport({
         </section>
 
         {/* Visual Compare */}
-        {topRef && benchmark.targetThumbnail && (
+        {topRef && benchmark.targetThumbnail && (() => {
+          const topRefLinks = getReferenceLinkPair(topRef.video, similarQuery);
+          const topRefHref = topRefLinks.watch?.href ?? topRefLinks.similar.href;
+          return (
           <section className="report-section visual-compare-section">
             <h3>내 영상 vs 레퍼런스 #1 비교</h3>
             <div className={`visual-compare-grid ${videoFormat}`}>
@@ -589,23 +565,33 @@ export function SimulationReport({
               <div className="visual-compare-vs">VS</div>
               <div className="visual-compare-card">
                 <span className="visual-compare-label">레퍼런스 #1</span>
-                <div className="visual-compare-frame landscape">
-                  {topRef.video.thumbnailUrl ? (
-                    <img src={topRef.video.thumbnailUrl} alt={topRef.video.title} />
-                  ) : (
-                    <div className="ref-showcase-placeholder">
-                      <Film size={24} />
-                    </div>
-                  )}
-                </div>
-                <p className="visual-compare-ref-title">{topRef.video.title}</p>
-                <span className="visual-compare-ref-views">
-                  {formatViews(topRef.video.viewCount)} views
-                </span>
+                <a
+                  href={topRefHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="visual-compare-ref-link"
+                  title={topRef.video.title}
+                >
+                  <div className="visual-compare-frame landscape">
+                    {topRef.video.thumbnailUrl ? (
+                      <img src={topRef.video.thumbnailUrl} alt={topRef.video.title} />
+                    ) : (
+                      <div className="ref-showcase-placeholder">
+                        <Film size={24} />
+                      </div>
+                    )}
+                  </div>
+                  <p className="visual-compare-ref-title">{topRef.video.title}</p>
+                  <span className="visual-compare-ref-views">
+                    {formatViews(topRef.video.viewCount)} views
+                  </span>
+                </a>
+                <ReferenceLinkActions video={topRef.video} similarQuery={similarQuery} compact />
               </div>
             </div>
           </section>
-        )}
+          );
+        })()}
 
         {/* Video Holistic Analysis */}
         <section className="report-section video-analysis-section">
@@ -696,17 +682,26 @@ export function SimulationReport({
                   </span>
                 </div>
                 <p className="pb-query">검색: {pb.searchQuery}</p>
-                {pb.references[0] && (
-                  <div className="pb-top-ref">
-                    {pb.references[0].video.thumbnailUrl && (
-                      <img src={pb.references[0].video.thumbnailUrl} alt="" />
-                    )}
-                    <div>
-                      <strong>{pb.references[0].video.title}</strong>
-                      <span>{formatViews(pb.references[0].video.viewCount)} views</span>
+                <div className="pb-refs">
+                  {pb.references.map((ref, refIdx) => (
+                    <div key={ref.video.videoId + refIdx} className="pb-ref-item">
+                      <div className="pb-ref-head">
+                        {ref.video.thumbnailUrl && (
+                          <img src={ref.video.thumbnailUrl} alt="" loading="lazy" />
+                        )}
+                        <div className="pb-ref-text">
+                          <strong>{ref.video.title}</strong>
+                          <span>{formatViews(ref.video.viewCount)} views</span>
+                        </div>
+                      </div>
+                      <ReferenceLinkActions
+                        video={ref.video}
+                        similarQuery={pb.searchQuery || similarQuery}
+                        compact
+                      />
                     </div>
-                  </div>
-                )}
+                  ))}
+                </div>
                 <span className="pb-count">레퍼런스 {pb.references.length}개</span>
               </div>
             ))}
@@ -721,12 +716,17 @@ export function SimulationReport({
           </h3>
           <p className="ref-showcase-desc">
             {isRealData
-              ? `"${benchmark.keywords.searchQuery}" — ${formatLabel} 고조회수 영상 ${showcaseRefs.length}개와 비교했습니다.`
-              : `${ORIENTATION_REFERENCE_HINT[videoFormat]} 중 상위 영상 ${showcaseRefs.length}개(AI 추정)와 비교했습니다. 카드를 클릭하면 YouTube에서 유사 영상을 검색하거나 재생할 수 있습니다.`}
+              ? `"${benchmark.keywords.searchQuery}" — ${formatLabel} 고조회수 영상 ${showcaseRefs.length}개와 비교했습니다. 레퍼런스 영상 보기와 유사 영상 검색 버튼을 사용하세요.`
+              : `${ORIENTATION_REFERENCE_HINT[videoFormat]} 중 상위 영상 ${showcaseRefs.length}개(AI 추정)와 비교했습니다. 레퍼런스 검색과 유사 영상 검색 버튼으로 YouTube를 열 수 있습니다.`}
           </p>
           <div className="ref-showcase-grid">
             {showcaseRefs.map((ref, i) => (
-              <ReferenceShowcaseCard key={ref.video.videoId + i} reference={ref} rank={i + 1} />
+              <ReferenceShowcaseCard
+                key={ref.video.videoId + i}
+                reference={ref}
+                rank={i + 1}
+                similarQuery={similarQuery}
+              />
             ))}
           </div>
 
@@ -735,24 +735,25 @@ export function SimulationReport({
               <summary>추가 레퍼런스 {extraRefs.length}개 보기</summary>
               <div className="reference-list">
                 {extraRefs.map((ref, i) => {
-                  const link = getReferenceLink(ref.video);
+                  const links = getReferenceLinkPair(ref.video, similarQuery);
+                  const primaryHref = links.watch?.href ?? links.similar.href;
                   return (
                   <div key={ref.video.videoId + i} className="reference-item">
                     <div className="reference-rank">#{i + SHOWCASE_COUNT + 1}</div>
                     <div className="reference-info">
-                      <strong>{ref.video.title}</strong>
+                      <a
+                        href={primaryHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ref-title-link"
+                        title={ref.video.title}
+                      >
+                        <strong>{ref.video.title}</strong>
+                      </a>
                       <span>{ref.video.channelTitle} · {formatViews(ref.video.viewCount)} views</span>
                       <p>{ref.summary}</p>
                     </div>
-                    <a
-                      href={link.href}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="reference-link"
-                      title={link.label}
-                    >
-                      {link.isSearch ? <Search size={14} /> : <ExternalLink size={14} />}
-                    </a>
+                    <ReferenceLinkActions video={ref.video} similarQuery={similarQuery} compact />
                   </div>
                   );
                 })}

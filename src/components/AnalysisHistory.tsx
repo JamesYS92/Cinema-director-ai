@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { History, X, Trash2, GitCompare, Eye } from 'lucide-react';
 import type { SavedAnalysisRecord } from '../types';
 import { ORIENTATION_LABELS } from '../utils/video';
@@ -16,8 +16,14 @@ interface AnalysisHistoryProps {
 }
 
 export function AnalysisHistory({ open, onClose, onLoad, onCompare }: AnalysisHistoryProps) {
-  const [history, setHistory] = useState<SavedAnalysisRecord[]>(() => getAnalysisHistory());
+  const [history, setHistory] = useState<SavedAnalysisRecord[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    setHistory(getAnalysisHistory());
+    setSelected([]);
+  }, [open]);
 
   if (!open) return null;
 

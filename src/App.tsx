@@ -9,12 +9,14 @@ import {
   Zap,
   Loader2,
   History,
+  FolderKanban,
 } from 'lucide-react';
 import { VideoPlayer } from './components/VideoPlayer';
 import { CutBoard } from './components/CutBoard';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulationReport } from './components/SimulationReport';
 import { AnalysisHistory, CompareReport } from './components/AnalysisHistory';
+import { SaveProjectModal } from './components/SaveProjectModal';
 import { AnalysisStepper } from './components/AnalysisStepper';
 import { runBenchmarkPipeline } from './services/benchmark';
 import type {
@@ -27,7 +29,8 @@ import type {
   VideoSourceType,
 } from './types';
 import { PRESET_DESCRIPTIONS, PRESET_LABELS } from './types';
-import { saveAnalysisRecord, exportAnalysisRecord, updateAnalysisRecord } from './utils/analysisHistory';
+import { SavedProjectsModal } from './components/SavedProjectsModal';
+import { saveAnalysisRecord, exportAnalysisRecord, updateAnalysisRecord, getProjectCount } from './utils/analysisHistory';
 import { generateId } from './utils/storage';
 import { detectDominantOrientation } from './utils/video';
 import { fetchApiStatus } from './services/apiClient';
@@ -55,11 +58,16 @@ export default function App() {
   const [videoFileName, setVideoFileName] = useState('');
   const [preset, setPreset] = useState<AnalysisPreset>('cinematic');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [projectCount, setProjectCount] = useState(() => getProjectCount());
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [savedRecord, setSavedRecord] = useState<SavedAnalysisRecord | null>(null);
   const [compareRecords, setCompareRecords] = useState<[SavedAnalysisRecord, SavedAnalysisRecord] | null>(null);
   const [savedLabel, setSavedLabel] = useState<string | undefined>();
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savingReport, setSavingReport] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState<AnalysisProgressStep | null>(null);
   const [analysisMessage, setAnalysisMessage] = useState('');
@@ -74,6 +82,10 @@ export default function App() {
       setServerYoutube(s.youtube);
     });
   }, [settingsOpen]);
+
+  const refreshProjectCount = useCallback(() => {
+    setProjectCount(getProjectCount());
+  }, []);
 
   const handleCapture = useCallback((capture: CaptureResult) => {
     setFrames((prev) => [
@@ -176,16 +188,28 @@ export default function App() {
       const title =
         videoFileName.replace(/\.[^.]+$/, '') ||
         result.benchmark.keywords.niche ||
-        '분석 결과';
+        '새 프로젝트';
 
-      const saved = saveAnalysisRecord(result, {
-        title,
-        thumbnail: frames[0].imageDataUrl,
-        videoFormat: detectDominantOrientation(frames),
-      });
+      try {
+        const saved = await saveAnalysisRecord(result, {
+          title,
+          thumbnail: frames[0].imageDataUrl,
+          videoFormat: detectDominantOrientation(frames),
+        });
 
-      setSavedRecord(saved);
-      setSavedLabel(`자동 저장됨 · ${new Date(saved.savedAt).toLocaleTimeString('ko-KR')}`);
+        setSavedRecord(saved);
+        setSavedLabel(`프로젝트 자동 저장 · ${new Date(saved.savedAt).toLocaleTimeString('ko-KR')}`);
+        refreshProjectCount();
+      } catch (saveErr) {
+        setSavedRecord(null);
+        setSavedLabel(undefined);
+        setError(
+          saveErr instanceof Error
+            ? `분석은 완료됐지만 프로젝트 저장에 실패했습니다. ${saveErr.message}`
+            : '분석은 완료됐지만 프로젝트 저장에 실패했습니다.',
+        );
+      }
+
       setReport(result);
       setAnalysisStep('done');
     } catch (err) {
@@ -202,32 +226,53 @@ export default function App() {
     }
   }, [report]);
 
+  const defaultProjectTitle =
+    savedRecord?.title ||
+    videoFileName.replace(/\.[^.]+$/, '') ||
+    report?.benchmark.keywords.niche ||
+    '새 프로젝트';
+
   const handleSaveReport = () => {
     if (!report) return;
-    const defaultTitle =
-      savedRecord?.title ||
-      videoFileName.replace(/\.[^.]+$/, '') ||
-      report.benchmark.keywords.niche ||
-      '분석 결과';
-    const title = window.prompt('저장할 리포트 이름', defaultTitle)?.trim();
-    if (!title) return;
+    setSaveError(null);
+    setSaveModalOpen(true);
+  };
 
-    if (savedRecord) {
-      const updated = updateAnalysisRecord(savedRecord.id, { title, report });
-      if (updated) {
-        setSavedRecord(updated);
-        setSavedLabel(`저장됨 · ${new Date(updated.savedAt).toLocaleString('ko-KR')}`);
+  const handleConfirmSaveReport = async (title: string) => {
+    if (!report) return;
+    setSavingReport(true);
+    setSaveError(null);
+
+    try {
+      const meta = {
+        title,
+        thumbnail: frames[0]?.imageDataUrl ?? savedRecord?.thumbnail ?? '',
+        videoFormat: frames.length > 0
+          ? detectDominantOrientation(frames)
+          : savedRecord?.videoFormat ?? report.benchmark.keywords.videoFormat,
+      };
+
+      if (savedRecord) {
+        const updated = await updateAnalysisRecord(savedRecord.id, { title, report });
+        if (updated) {
+          setSavedRecord(updated);
+          setSavedLabel(`프로젝트 저장됨 · ${new Date(updated.savedAt).toLocaleString('ko-KR')}`);
+          setSaveModalOpen(false);
+          refreshProjectCount();
+          return;
+        }
       }
-      return;
-    }
 
-    const saved = saveAnalysisRecord(report, {
-      title,
-      thumbnail: frames[0]?.imageDataUrl ?? '',
-      videoFormat: frames.length > 0 ? detectDominantOrientation(frames) : 'landscape',
-    });
-    setSavedRecord(saved);
-    setSavedLabel(`저장됨 · ${new Date(saved.savedAt).toLocaleString('ko-KR')}`);
+      const saved = await saveAnalysisRecord(report, meta);
+      setSavedRecord(saved);
+      setSavedLabel(`프로젝트 저장됨 · ${new Date(saved.savedAt).toLocaleString('ko-KR')}`);
+      setSaveModalOpen(false);
+      refreshProjectCount();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : '프로젝트 저장에 실패했습니다.');
+    } finally {
+      setSavingReport(false);
+    }
   };
 
   const handleExportReport = () => {
@@ -239,11 +284,11 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleLoadHistory = (record: SavedAnalysisRecord) => {
+  const handleLoadProject = (record: SavedAnalysisRecord) => {
     setCompareRecords(null);
     setReport(record.report);
     setSavedRecord(record);
-    setSavedLabel(`불러옴 · ${new Date(record.savedAt).toLocaleString('ko-KR')}`);
+    setSavedLabel(`프로젝트 불러옴 · ${new Date(record.savedAt).toLocaleString('ko-KR')}`);
   };
 
   const handleCompare = (a: SavedAnalysisRecord, b: SavedAnalysisRecord) => {
@@ -273,6 +318,15 @@ export default function App() {
           {serverReady && serverYoutube && (
             <span className="api-badge success">서버 API 준비됨</span>
           )}
+          <button
+            className="icon-btn header-project-btn"
+            onClick={() => setProjectsOpen(true)}
+            aria-label="저장된 프로젝트"
+            title="저장된 프로젝트"
+          >
+            <FolderKanban size={20} />
+            {projectCount > 0 && <span className="header-project-badge">{projectCount}</span>}
+          </button>
           <button
             className="icon-btn"
             onClick={() => setHistoryOpen(true)}
@@ -376,11 +430,35 @@ export default function App() {
         )}
       </main>
 
+      <SavedProjectsModal
+        open={projectsOpen}
+        activeProjectId={savedRecord?.id}
+        onClose={() => setProjectsOpen(false)}
+        onLoad={handleLoadProject}
+        onProjectsChange={refreshProjectCount}
+      />
+
       <AnalysisHistory
         open={historyOpen}
-        onClose={() => setHistoryOpen(false)}
-        onLoad={handleLoadHistory}
+        onClose={() => {
+          setHistoryOpen(false);
+          refreshProjectCount();
+        }}
+        onLoad={handleLoadProject}
         onCompare={handleCompare}
+      />
+
+      <SaveProjectModal
+        open={saveModalOpen}
+        defaultTitle={defaultProjectTitle}
+        saving={savingReport}
+        error={saveError}
+        onClose={() => {
+          if (savingReport) return;
+          setSaveModalOpen(false);
+          setSaveError(null);
+        }}
+        onSave={handleConfirmSaveReport}
       />
 
       <SettingsModal
