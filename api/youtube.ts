@@ -12,8 +12,9 @@ export default async function handler(request: Request) {
     return Response.json({ error: 'YouTube API 키가 서버에 설정되지 않았습니다.' }, { status: 503 });
   }
 
-  const body = (await request.json().catch(() => ({}))) as { action?: string; [key: string]: unknown };
-  const { action, ...params } = body;
+  const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+  const action = body.action as string | undefined;
+  const params = body;
 
   try {
     switch (action) {
