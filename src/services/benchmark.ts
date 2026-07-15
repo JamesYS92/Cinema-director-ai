@@ -118,10 +118,10 @@ export async function runBenchmarkPipeline(
   const formatLabel = ORIENTATION_LABELS[videoFormat];
   const targetThumbnail = imageDataUrls[0] ?? '';
 
-  onProgress?.('keywords', '분석 데이터 최적화 중...');
+  onProgress?.('keywords', `전체 ${imageDataUrls.length}컷 압축·최적화 중...`);
   const apiImages = await prepareFramesForApi(imageDataUrls);
 
-  onProgress?.('keywords', `${formatLabel} — 키워드 추출 중...`);
+  onProgress?.('keywords', `${formatLabel} — ${apiImages.length}컷 키워드 추출 중...`);
   const keywords = await extractKeywords(apiImages, videoFormat);
 
   let trendingVideos: TrendingVideo[] = [];
@@ -184,7 +184,7 @@ export async function runBenchmarkPipeline(
     }
   }
 
-  onProgress?.('compare', '멀티플랫폼 벤치마크 비교 및 리포트 생성 중...');
+  onProgress?.('compare', `전체 ${apiImages.length}컷 벤치마크 리포트 생성 중...`);
   const report = await generateBenchmarkReport(
     apiImages,
     preset,

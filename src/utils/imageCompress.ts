@@ -1,14 +1,5 @@
-const MAX_API_FRAMES = 8;
-const MAX_API_WIDTH = 640;
-const JPEG_QUALITY = 0.62;
-
-function sampleFrames<T>(items: T[], max: number): T[] {
-  if (items.length <= max) return items;
-  return Array.from({ length: max }, (_, i) => {
-    const index = Math.round((i * (items.length - 1)) / (max - 1));
-    return items[index];
-  });
-}
+const MAX_API_WIDTH = 512;
+const JPEG_QUALITY = 0.55;
 
 export async function compressDataUrl(
   dataUrl: string,
@@ -37,12 +28,9 @@ export async function compressDataUrl(
   });
 }
 
-export async function prepareFramesForApi(
-  imageDataUrls: string[],
-  maxFrames = MAX_API_FRAMES,
-): Promise<string[]> {
-  const sampled = sampleFrames(imageDataUrls, maxFrames);
-  return Promise.all(sampled.map((url) => compressDataUrl(url)));
+/** 전체 컷보드(최대 30장)를 API 전송용으로 압축 */
+export async function prepareFramesForApi(imageDataUrls: string[]): Promise<string[]> {
+  return Promise.all(imageDataUrls.map((url) => compressDataUrl(url)));
 }
 
 /** Vercel 서버리스 요청 본문 제한(~4.5MB) 대응 */

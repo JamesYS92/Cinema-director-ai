@@ -1,7 +1,14 @@
 import type { Part } from '@google/generative-ai';
 
+export const MAX_REQUEST_BYTES = 3.5 * 1024 * 1024;
+export const IMAGES_PER_BATCH = 6;
+
 function normalizeParts(parts: (string | Part)[]): Part[] {
   return parts.map((part) => (typeof part === 'string' ? { text: part } : part));
+}
+
+export function estimatePayloadBytes(parts: (string | Part)[]): number {
+  return JSON.stringify({ parts: normalizeParts(parts) }).length;
 }
 
 export async function generateViaApi(parts: (string | Part)[]): Promise<string> {
@@ -10,7 +17,7 @@ export async function generateViaApi(parts: (string | Part)[]): Promise<string> 
 
   if (payload.length > 4 * 1024 * 1024) {
     throw new Error(
-      '분석 데이터가 너무 큽니다. 컷 수를 줄이거나(8장 이하 권장) 다시 시도해 주세요.',
+      '분석 데이터가 너무 큽니다. 잠시 후 다시 시도해 주세요.',
     );
   }
 
@@ -23,7 +30,7 @@ export async function generateViaApi(parts: (string | Part)[]): Promise<string> 
   if (!res.ok) {
     if (res.status === 413) {
       throw new Error(
-        '요청 용량이 서버 제한을 초과했습니다. 컷 수를 줄이고(8장 이하 권장) 다시 시도해 주세요.',
+        '요청 용량이 서버 제한을 초과했습니다. 잠시 후 다시 시도해 주세요.',
       );
     }
     throw new Error(data.error || `AI 서버 오류 (${res.status})`);

@@ -22,7 +22,7 @@ import { SERVER_VIDEO_UPLOAD_LIMIT } from '../utils/imageCompress';
 import { dataUrlToBase64 } from '../utils/storage';
 import { ORIENTATION_LABELS, ORIENTATION_REFERENCE_HINT } from '../utils/video';
 import { fetchThumbnailAsBase64 } from './youtube';
-import { generateViaApi } from './geminiApi';
+import { estimatePayloadBytes, generateViaApi, IMAGES_PER_BATCH, MAX_REQUEST_BYTES } from './geminiApi';
 
 const PRESET_CONTEXT: Record<AnalysisPreset, string> = {
   cinematic:
@@ -71,6 +71,41 @@ function imagePart(dataUrl: string): Part {
   return {
     inlineData: { mimeType: 'image/jpeg', data: dataUrlToBase64(dataUrl) },
   };
+}
+
+/** 30컷 등 대량 프레임을 서버 용량 제한 내에서 배치 분석 후 통합 */
+async function generateWithBatchedImages(
+  prompt: string,
+  imageDataUrls: string[],
+  synthesizePrompt: string,
+  batchSize = IMAGES_PER_BATCH,
+): Promise<string> {
+  if (imageDataUrls.length === 0) {
+    return generateViaApi([prompt]);
+  }
+
+  const allParts: (string | Part)[] = [prompt, ...imageDataUrls.map(imagePart)];
+  if (estimatePayloadBytes(allParts) <= MAX_REQUEST_BYTES) {
+    return generateViaApi(allParts);
+  }
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < imageDataUrls.length; i += batchSize) {
+    chunks.push(imageDataUrls.slice(i, i + batchSize));
+  }
+
+  const partials: string[] = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const batchPrompt = `${prompt}\n\n[배치 ${i + 1}/${chunks.length} — 아래 ${chunks[i].length}개 프레임만 분석하고 핵심 관찰을 bullet로 작성하세요.]`;
+    const text = await generateViaApi([batchPrompt, ...chunks[i].map(imagePart)]);
+    partials.push(text);
+  }
+
+  const mergedPrompt = `${synthesizePrompt}\n\n## 배치별 관찰 (전체 ${imageDataUrls.length}컷)\n${partials
+    .map((p, i) => `### 배치 ${i + 1}\n${p}`)
+    .join('\n\n')}`;
+
+  return generateViaApi([mergedPrompt]);
 }
 
 function thumbnailPart(base64: string): Part {
@@ -219,7 +254,11 @@ JSON만 응답:
   "videoFormat": "${videoFormat}"
 }`;
 
-  const text = await generateViaApi([prompt, ...imageDataUrls.map(imagePart)]);
+  const text = await generateWithBatchedImages(
+    prompt,
+    imageDataUrls,
+    `${prompt}\n\n위 배치별 관찰을 **전체 ${imageDataUrls.length}개 프레임**을 반영해 통합하고, 아래 JSON 형식 하나만 출력하세요.`,
+  );
   const parsed = parseJson<ExtractedKeywords>(text);
   return { ...parsed, videoFormat };
 }
@@ -488,7 +527,12 @@ JSON만 응답:
 
 조회수는 레퍼런스 조회수(${refData.map((r) => r.views.toLocaleString()).join(', ')})를 기준으로 현실적으로 산출하세요.`;
 
-  const text = await generateViaApi([prompt, ...imageDataUrls.map(imagePart)]);
+  const text = await generateWithBatchedImages(
+    prompt,
+    imageDataUrls,
+    `${prompt}\n\n위 배치별 관찰과 컷보드 전체 맥락을 반영해, 아래 JSON 형식 하나만 출력하세요.`,
+    5,
+  );
 
   const parsed = parseJson<
     Omit<AnalysisReport, 'benchmark'> & {
