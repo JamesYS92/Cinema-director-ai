@@ -1,7 +1,7 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+export const config = { runtime: 'edge' };
 
-export default function handler(_req: VercelRequest, res: VercelResponse) {
-  const studyToken = process.env.STUDY_LLM_API_TOKEN?.trim() ?? '';
+export default function handler() {
+  const studyToken = (process.env.STUDY_LLM_API_TOKEN ?? '').trim();
   const studyProxy = studyToken.startsWith('study_live_');
   const directGemini = !!process.env.GEMINI_API_KEY;
   const gemini = studyProxy || directGemini;
@@ -22,7 +22,7 @@ export default function handler(_req: VercelRequest, res: VercelResponse) {
     message = 'YouTube API 미설정 — AI 추정 레퍼런스 모드로 동작합니다.';
   }
 
-  return res.status(200).json({
+  return Response.json({
     ready: gemini,
     gemini,
     youtube,

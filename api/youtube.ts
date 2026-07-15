@@ -1,24 +1,24 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-import type { ExtractedKeywords, PlatformId, ReferenceVideo, VideoOrientation } from '../src/types';
-import * as youtubeCore from '../src/server/youtubeCore';
+import * as youtubeCore from './youtubeCore';
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+export const config = { runtime: 'edge' };
+
+export default async function handler(request: Request) {
+  if (request.method !== 'POST') {
+    return Response.json({ error: 'Method not allowed' }, { status: 405 });
   }
 
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) {
-    return res.status(503).json({ error: 'YouTube API 키가 서버에 설정되지 않았습니다.' });
+    return Response.json({ error: 'YouTube API 키가 서버에 설정되지 않았습니다.' }, { status: 503 });
   }
 
-  const body = req.body as { action?: string };
+  const body = (await request.json().catch(() => ({}))) as { action?: string; [key: string]: unknown };
   const { action, ...params } = body;
 
   try {
     switch (action) {
       case 'searchTopVideos':
-        return res.status(200).json({
+        return Response.json({
           result: await youtubeCore.searchTopVideos(
             apiKey,
             params.query as string,
@@ -27,49 +27,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
 
       case 'searchPlatformReferences':
-        return res.status(200).json({
+        return Response.json({
           result: await youtubeCore.searchPlatformReferences(
             apiKey,
             params.baseQuery as string,
-            params.orientation as VideoOrientation,
-            params.platform as PlatformId,
+            params.orientation as youtubeCore.VideoOrientation,
+            params.platform as youtubeCore.PlatformId,
             params.maxResults as number | undefined,
           ),
         });
 
       case 'resolveEstimatedReference':
-        return res.status(200).json({
+        return Response.json({
           result: await youtubeCore.resolveEstimatedReference(
             apiKey,
-            params.video as ReferenceVideo,
-            params.orientation as VideoOrientation,
+            params.video as youtubeCore.ReferenceVideo,
+            params.orientation as youtubeCore.VideoOrientation,
           ),
         });
 
       case 'searchTrendingRelatedVideos':
-        return res.status(200).json({
+        return Response.json({
           result: await youtubeCore.searchTrendingRelatedVideos(
             apiKey,
-            params.keywords as ExtractedKeywords,
+            params.keywords as youtubeCore.ExtractedKeywords,
             params.maxResults as number | undefined,
           ),
         });
 
       case 'fetchThumbnail':
-        return res.status(200).json({
+        return Response.json({
           result: await youtubeCore.fetchThumbnailAsBase64(params.url as string),
         });
 
       case 'checkConnection':
-        return res.status(200).json({
+        return Response.json({
           result: await youtubeCore.checkYoutubeApiConnection(apiKey),
         });
 
       default:
-        return res.status(400).json({ error: `Unknown action: ${action}` });
+        return Response.json({ error: `Unknown action: ${action}` }, { status: 400 });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'YouTube API 오류';
-    return res.status(500).json({ error: message });
+    return Response.json({ error: message }, { status: 500 });
   }
 }
