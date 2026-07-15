@@ -11,20 +11,29 @@ export interface StoryboardFrameRef {
   timestamp: number;
 }
 
+const imageCache = new Map<string, Promise<HTMLImageElement>>();
+
 function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
+  const cached = imageCache.get(url);
+  if (cached) return cached;
+
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('이미지 로드 실패'));
     img.src = url;
   });
+
+  imageCache.set(url, promise);
+  return promise;
 }
 
 async function loadImageWithFallback(url: string): Promise<HTMLImageElement> {
   try {
     return await loadImage(url);
   } catch {
+    imageCache.delete(url);
     const base64 = await fetchThumbnailAsBase64(url);
     if (!base64) throw new Error('YouTube 프레임 이미지를 불러오지 못했습니다.');
     return loadImage(`data:image/jpeg;base64,${base64}`);

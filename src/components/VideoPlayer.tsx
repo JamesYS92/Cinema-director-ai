@@ -23,7 +23,7 @@ interface VideoPlayerProps {
   sourceType: VideoSourceType;
   onSourceTypeChange: (type: VideoSourceType) => void;
   onCapture: (capture: CaptureResult) => void;
-  onBatchCapture: (captures: CaptureResult[]) => void;
+  onBatchCapture: (captures: CaptureResult[], replace?: boolean) => void;
   onVideoFile: (file: File | null, fileName: string) => void;
   onVideoSourceChange: () => void;
 }
@@ -200,7 +200,7 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
     try {
       const { frames } = await extractYouTubeStoryboardFrames(videoId, count);
       const captures = await storyboardRefsToCaptures(frames);
-      onBatchCapture(captures);
+      onBatchCapture(captures, true);
     } catch (err) {
       setYoutubeError(
         err instanceof Error ? err.message : 'YouTube 프레임 추출에 실패했습니다.',

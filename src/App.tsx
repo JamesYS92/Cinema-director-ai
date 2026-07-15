@@ -85,7 +85,21 @@ export default function App() {
     ]);
   }, []);
 
-  const handleBatchCapture = useCallback((captures: CaptureResult[]) => {
+  const handleBatchCapture = useCallback((captures: CaptureResult[], replace = false) => {
+    const mapped = captures.map((cap, i) => ({
+      id: generateId(),
+      imageDataUrl: cap.imageDataUrl,
+      timestamp: cap.timestamp,
+      width: cap.width,
+      height: cap.height,
+      label: `Cut ${i + 1}`,
+    }));
+
+    if (replace) {
+      setFrames(mapped);
+      return;
+    }
+
     setFrames((prev) => [
       ...prev,
       ...captures.map((cap, i) => ({
