@@ -14,6 +14,8 @@ import {
 import type { CaptureResult, VideoSourceType } from '../types';
 import { extractYouTubeId, formatTimestamp, isDirectVideoUrl } from '../utils/storage';
 import { computeAutoCaptureTimestamps, getVideoOrientation, type VideoOrientation } from '../utils/video';
+import { extractYouTubeStoryboardFrames } from '../services/youtube';
+import { storyboardRefsToCaptures } from '../utils/youtubeFrames';
 
 const AUTO_CUT_OPTIONS = [10, 20, 30] as const;
 
@@ -43,6 +45,9 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
   const [autoCapturing, setAutoCapturing] = useState(false);
   const [autoCutCount, setAutoCutCount] = useState<number | null>(null);
   const [videoOrientation, setVideoOrientation] = useState<VideoOrientation>('landscape');
+  const [youtubeMeta, setYoutubeMeta] = useState<{ title: string; duration: number } | null>(null);
+  const [youtubeLoading, setYoutubeLoading] = useState(false);
+  const [youtubeError, setYoutubeError] = useState<string | null>(null);
 
   const activeVideoUrl = sourceType === 'local' ? localUrl : directUrl;
 
@@ -90,7 +95,7 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
     setVideoOrientation('landscape');
   };
 
-  const handleWebLoad = () => {
+  const handleWebLoad = async () => {
     const trimmed = webUrl.trim();
     if (!trimmed) return;
 
@@ -99,13 +104,32 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
       onVideoSourceChange();
       setYoutubeId(ytId);
       setDirectUrl(null);
+      setYoutubeMeta(null);
+      setYoutubeError(null);
+      setYoutubeLoading(true);
       onVideoFile(null, trimmed);
+
+      try {
+        const { meta } = await extractYouTubeStoryboardFrames(ytId, 1);
+        setYoutubeMeta({ title: meta.title, duration: meta.duration });
+        onVideoFile(null, meta.title);
+        if (meta.orientation) setVideoOrientation(meta.orientation);
+        await handleYouTubeAutoCapture(30, ytId);
+      } catch (err) {
+        setYoutubeError(
+          err instanceof Error ? err.message : 'YouTube 영상 정보를 불러오지 못했습니다.',
+        );
+      } finally {
+        setYoutubeLoading(false);
+      }
       return;
     }
 
     if (isDirectVideoUrl(trimmed)) {
       onVideoSourceChange();
       setYoutubeId(null);
+      setYoutubeMeta(null);
+      setYoutubeError(null);
       setDirectUrl(trimmed);
       onVideoFile(null, trimmed);
       return;
@@ -152,32 +176,49 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
     });
   }, [captureFromVideo]);
 
-  const handleCapture = () => {
-    const v = videoRef.current;
-    const c = canvasRef.current;
-    if (!v || !c || v.readyState < 2) {
-      if (youtubeId) {
-        alert(
-          'YouTube 임베드 영상은 CORS 제한으로 프레임 캡처가 불가합니다.\n' +
-            '로컬 파일을 업로드하거나 직접 비디오 URL(.mp4)을 사용해 주세요.',
-        );
-      }
+  const handleCapture = async () => {
+    if (youtubeId) {
+      await handleYouTubeAutoCapture(1);
       return;
     }
+
+    const v = videoRef.current;
+    const c = canvasRef.current;
+    if (!v || !c || v.readyState < 2) return;
 
     const result = captureFromVideo(v, c);
     if (result) onCapture(result);
   };
 
+  const handleYouTubeAutoCapture = async (count: number, videoId = youtubeId) => {
+    if (!videoId) return;
+
+    setAutoCapturing(true);
+    setAutoCutCount(count);
+    setYoutubeError(null);
+
+    try {
+      const { frames } = await extractYouTubeStoryboardFrames(videoId, count);
+      const captures = await storyboardRefsToCaptures(frames);
+      onBatchCapture(captures);
+    } catch (err) {
+      setYoutubeError(
+        err instanceof Error ? err.message : 'YouTube 프레임 추출에 실패했습니다.',
+      );
+    } finally {
+      setAutoCapturing(false);
+      setAutoCutCount(null);
+    }
+  };
+
   const handleAutoCapture = async (count: number) => {
+    if (youtubeId) {
+      await handleYouTubeAutoCapture(count);
+      return;
+    }
+
     const v = videoRef.current;
     if (!v || !activeVideoUrl || v.readyState < 2) {
-      if (youtubeId) {
-        alert(
-          'YouTube 임베드 영상은 CORS 제한으로 프레임 캡처가 불가합니다.\n' +
-            '로컬 파일을 업로드하거나 직접 비디오 URL(.mp4)을 사용해 주세요.',
-        );
-      }
       return;
     }
 
@@ -358,14 +399,23 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
               </button>
             </>
           )}
-          <button className="btn capture-btn" onClick={handleCapture} disabled={!activeVideoUrl || autoCapturing}>
+          <button className="btn capture-btn" onClick={handleCapture} disabled={(!activeVideoUrl && !youtubeId) || autoCapturing || youtubeLoading}>
             <Camera size={16} />
             프레임 캡처
           </button>
         </div>
       )}
 
-      {activeVideoUrl && duration > 0 && (
+      {youtubeError && <p className="youtube-error">{youtubeError}</p>}
+
+      {youtubeId && youtubeMeta && (
+        <div className="youtube-meta">
+          <span className="youtube-meta-title">{youtubeMeta.title}</span>
+          <span className="youtube-meta-duration">{formatTimestamp(youtubeMeta.duration)}</span>
+        </div>
+      )}
+
+      {((activeVideoUrl && duration > 0) || youtubeId) && (
         <div className="auto-capture-bar">
           <span className="auto-capture-label">
             <Layers size={14} />
@@ -377,8 +427,12 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
                 key={count}
                 className={`btn auto-cut-btn ${autoCutCount === count ? 'active' : ''}`}
                 onClick={() => handleAutoCapture(count)}
-                disabled={autoCapturing}
-                title={`영상 전체를 ${count}등분하여 균등 간격으로 캡처 (${formatTimestamp(duration / count)} 간격)`}
+                disabled={autoCapturing || youtubeLoading}
+                title={
+                  youtubeId
+                    ? `YouTube 스토리보드에서 ${count}컷 추출`
+                    : `영상 전체를 ${count}등분하여 균등 간격으로 캡처 (${formatTimestamp((duration || youtubeMeta?.duration || 0) / count)} 간격)`
+                }
               >
                 {autoCapturing && autoCutCount === count ? (
                   <Loader2 size={14} className="spin" />
@@ -389,7 +443,12 @@ export function VideoPlayer({ sourceType, onSourceTypeChange, onCapture, onBatch
           </div>
           {autoCapturing && autoCutCount && (
             <span className="auto-capture-status">
-              {autoCutCount}컷 캡처 중...
+              {youtubeId ? 'YouTube ' : ''}{autoCutCount}컷 추출 중...
+            </span>
+          )}
+          {youtubeLoading && (
+            <span className="auto-capture-status">
+              <Loader2 size={14} className="spin" /> YouTube 정보 불러오는 중...
             </span>
           )}
         </div>

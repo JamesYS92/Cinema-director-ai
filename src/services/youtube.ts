@@ -63,6 +63,35 @@ export async function fetchThumbnailAsBase64(url: string): Promise<string | null
   return youtubeApi('fetchThumbnail', { url });
 }
 
+export interface YouTubeVideoMeta {
+  videoId: string;
+  title: string;
+  channelTitle: string;
+  duration: number;
+  orientation: 'portrait' | 'landscape' | 'square';
+  thumbnailUrl: string;
+}
+
+export interface StoryboardFrameRef {
+  spriteUrl: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  timestamp: number;
+}
+
+export async function getYouTubeVideoMeta(videoId: string): Promise<YouTubeVideoMeta> {
+  return youtubeApi('getVideoMeta', { videoId });
+}
+
+export async function extractYouTubeStoryboardFrames(
+  videoId: string,
+  count: number,
+): Promise<{ meta: YouTubeVideoMeta; frames: StoryboardFrameRef[] }> {
+  return youtubeApi('extractStoryboardFrames', { videoId, count });
+}
+
 export async function isYoutubeAvailable(): Promise<boolean> {
   try {
     const status = await import('./apiClient').then((m) => m.fetchApiStatus());

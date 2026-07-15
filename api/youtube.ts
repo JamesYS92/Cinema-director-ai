@@ -1,4 +1,5 @@
 import * as youtubeCore from './youtubeCore';
+import * as youtubeStoryboard from './youtubeStoryboard';
 
 export const config = { runtime: 'edge' };
 
@@ -8,13 +9,15 @@ export default async function handler(request: Request) {
   }
 
   const apiKey = process.env.YOUTUBE_API_KEY;
-  if (!apiKey) {
-    return Response.json({ error: 'YouTube API 키가 서버에 설정되지 않았습니다.' }, { status: 503 });
-  }
 
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
   const action = body.action as string | undefined;
   const params = body;
+
+  const storyboardActions = new Set(['getVideoMeta', 'extractStoryboardFrames']);
+  if (!apiKey && !storyboardActions.has(action ?? '')) {
+    return Response.json({ error: 'YouTube API 키가 서버에 설정되지 않았습니다.' }, { status: 503 });
+  }
 
   try {
     switch (action) {
@@ -59,6 +62,23 @@ export default async function handler(request: Request) {
       case 'fetchThumbnail':
         return Response.json({
           result: await youtubeCore.fetchThumbnailAsBase64(params.url as string),
+        });
+
+      case 'getVideoMeta':
+        return Response.json({
+          result: await youtubeStoryboard.fetchYouTubeVideoMeta(
+            params.videoId as string,
+            apiKey ?? undefined,
+          ),
+        });
+
+      case 'extractStoryboardFrames':
+        return Response.json({
+          result: await youtubeStoryboard.fetchYouTubeStoryboardFrames(
+            params.videoId as string,
+            (params.count as number) || 30,
+            apiKey ?? undefined,
+          ),
         });
 
       case 'checkConnection':
