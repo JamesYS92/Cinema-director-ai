@@ -20,6 +20,7 @@ import { METRIC_LABELS, PLATFORM_LABELS } from '../types';
 import { fileToBase64, MAX_VIDEO_ANALYSIS_BYTES, formatFileSize } from '../utils/file';
 import { SERVER_VIDEO_UPLOAD_LIMIT } from '../utils/imageCompress';
 import { dataUrlToBase64 } from '../utils/storage';
+import { parseAiJson } from '../utils/parseAiJson';
 import { ORIENTATION_LABELS, ORIENTATION_REFERENCE_HINT } from '../utils/video';
 import { fetchThumbnailAsBase64 } from './youtube';
 import { estimatePayloadBytes, generateViaApi, IMAGES_PER_BATCH, MAX_REQUEST_BYTES } from './geminiApi';
@@ -34,11 +35,11 @@ const PRESET_CONTEXT: Record<AnalysisPreset, string> = {
 };
 
 const METRICS_SCHEMA = `{
-  "trendFit": 0-100,
-  "empathy": 0-100,
-  "targetAudience": 0-100,
-  "contentIdea": 0-100,
-  "viralAppeal": 0-100
+  "trendFit": 75,
+  "empathy": 80,
+  "targetAudience": 70,
+  "contentIdea": 72,
+  "viralAppeal": 68
 }`;
 
 const METRICS_GUIDE = `
@@ -58,9 +59,7 @@ const DEFAULT_METRICS: MarketingMetrics = {
 };
 
 function parseJson<T>(text: string): T {
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('AI 응답에서 JSON을 찾을 수 없습니다.');
-  return JSON.parse(jsonMatch[0]) as T;
+  return parseAiJson<T>(text);
 }
 
 function avgMarketingMetrics(m: MarketingMetrics): number {
@@ -73,20 +72,27 @@ function imagePart(dataUrl: string): Part {
   };
 }
 
+async function generateJsonViaApi(parts: (string | Part)[]): Promise<string> {
+  return generateViaApi(parts, { jsonMode: true });
+}
+
 /** 30컷 등 대량 프레임을 서버 용량 제한 내에서 배치 분석 후 통합 */
 async function generateWithBatchedImages(
   prompt: string,
   imageDataUrls: string[],
   synthesizePrompt: string,
-  batchSize = IMAGES_PER_BATCH,
+  options?: { batchSize?: number; batchPrompt?: string },
 ): Promise<string> {
+  const batchSize = options?.batchSize ?? IMAGES_PER_BATCH;
+  const batchPromptBase = options?.batchPrompt ?? prompt;
+
   if (imageDataUrls.length === 0) {
-    return generateViaApi([prompt]);
+    return generateJsonViaApi([prompt]);
   }
 
   const allParts: (string | Part)[] = [prompt, ...imageDataUrls.map(imagePart)];
   if (estimatePayloadBytes(allParts) <= MAX_REQUEST_BYTES) {
-    return generateViaApi(allParts);
+    return generateJsonViaApi(allParts);
   }
 
   const chunks: string[][] = [];
@@ -96,7 +102,7 @@ async function generateWithBatchedImages(
 
   const partials: string[] = [];
   for (let i = 0; i < chunks.length; i++) {
-    const batchPrompt = `${prompt}\n\n[배치 ${i + 1}/${chunks.length} — 아래 ${chunks[i].length}개 프레임만 분석하고 핵심 관찰을 bullet로 작성하세요.]`;
+    const batchPrompt = `${batchPromptBase}\n\n[배치 ${i + 1}/${chunks.length} — 아래 ${chunks[i].length}개 프레임만 보고 핵심 관찰을 bullet로 작성하세요. JSON은 출력하지 마세요.]`;
     const text = await generateViaApi([batchPrompt, ...chunks[i].map(imagePart)]);
     partials.push(text);
   }
@@ -105,7 +111,7 @@ async function generateWithBatchedImages(
     .map((p, i) => `### 배치 ${i + 1}\n${p}`)
     .join('\n\n')}`;
 
-  return generateViaApi([mergedPrompt]);
+  return generateJsonViaApi([mergedPrompt]);
 }
 
 function thumbnailPart(base64: string): Part {
@@ -170,7 +176,7 @@ export async function analyzeVideoHolistic(
 }`;
 
   try {
-    const text = await generateViaApi([
+    const text = await generateJsonViaApi([
       { inlineData: { mimeType, data: base64 } },
       prompt,
     ]);
@@ -201,14 +207,14 @@ JSON만 응답:
     {
       "title": "영상 제목",
       "channelTitle": "채널명",
-      "viewCount": 숫자,
+      "viewCount": 1500000,
       "metrics": ${METRICS_SCHEMA},
       "summary": "이 영상이 조회수를 뽑은 기획/마케팅 이유 한 문장"
     }
   ]
 }`;
 
-  const text = await generateViaApi([prompt]);
+  const text = await generateJsonViaApi([prompt]);
   const parsed = parseJson<{
     references: {
       title: string;
@@ -254,10 +260,26 @@ JSON만 응답:
   "videoFormat": "${videoFormat}"
 }`;
 
+  const synthesizePrompt = `전체 ${imageDataUrls.length}컷 컷보드 배치 관찰을 통합해 키워드를 추출하세요.
+형식: ${formatLabel}
+반드시 유효한 JSON만 출력하세요:
+{
+  "primary": ["키워드1", "키워드2", "키워드3"],
+  "secondary": ["키워드4", "키워드5"],
+  "niche": "니치/타겟 설명",
+  "contentType": "콘텐츠 유형",
+  "searchQuery": "레퍼런스 검색어",
+  "videoFormat": "${videoFormat}"
+}`;
+
   const text = await generateWithBatchedImages(
     prompt,
     imageDataUrls,
-    `${prompt}\n\n위 배치별 관찰을 **전체 ${imageDataUrls.length}개 프레임**을 반영해 통합하고, 아래 JSON 형식 하나만 출력하세요.`,
+    synthesizePrompt,
+    {
+      batchPrompt:
+        '컷보드 프레임을 보고 콘텐츠 니치, 타겟, 트렌드 키워드 관련 관찰을 bullet로 작성하세요.',
+    },
   );
   const parsed = parseJson<ExtractedKeywords>(text);
   return { ...parsed, videoFormat };
@@ -311,7 +333,7 @@ JSON만 응답:
   const parts: (string | Part)[] = [prompt];
   for (const t of thumbnails) parts.push(thumbnailPart(t.base64));
 
-  const text = await generateViaApi(parts);
+  const text = await generateJsonViaApi(parts);
   const parsed = parseJson<{ references: { index: number; metrics: MarketingMetrics; summary: string }[] }>(
     text,
   );
@@ -344,14 +366,14 @@ JSON만 응답:
     {
       "title": "추정 제목",
       "channelTitle": "채널명",
-      "viewCount": 숫자,
+      "viewCount": 1500000,
       "metrics": ${METRICS_SCHEMA},
       "summary": "조회수 성공 기획 요인"
     }
   ]
 }`;
 
-  const text = await generateViaApi([prompt]);
+  const text = await generateJsonViaApi([prompt]);
   const parsed = parseJson<{
     references: {
       title: string;
@@ -507,11 +529,11 @@ JSON만 응답:
     "strengths": ["기획/마케팅 장점 1", "장점 2", "장점 3", "장점 4"],
     "weaknesses": ["기획/마케팅 단점 1", "단점 2", "단점 3", "단점 4"]
   },
-  "viralIndex": 0-100,
+  "viralIndex": 72,
   "platformScores": [
-    { "platform": "youtube", "label": "${videoFormat === 'portrait' ? 'YouTube Shorts' : 'YouTube'}", "fitScore": 0-100, "estimatedViews": { "min": 숫자, "max": 숫자 }, "avd": 0-100, "ctr": 0-15 },
-    { "platform": "instagram", "label": "Instagram Reels", "fitScore": 0-100, "estimatedViews": { "min": 숫자, "max": 숫자 }, "avd": 0-100, "ctr": 0-15 },
-    { "platform": "tiktok", "label": "TikTok", "fitScore": 0-100, "estimatedViews": { "min": 숫자, "max": 숫자 }, "avd": 0-100, "ctr": 0-15 }
+    { "platform": "youtube", "label": "${videoFormat === 'portrait' ? 'YouTube Shorts' : 'YouTube'}", "fitScore": 75, "estimatedViews": { "min": 10000, "max": 50000 }, "avd": 70, "ctr": 8 },
+    { "platform": "instagram", "label": "Instagram Reels", "fitScore": 72, "estimatedViews": { "min": 8000, "max": 40000 }, "avd": 68, "ctr": 7 },
+    { "platform": "tiktok", "label": "TikTok", "fitScore": 78, "estimatedViews": { "min": 15000, "max": 80000 }, "avd": 72, "ctr": 9 }
   ],
   "feedback": {
     "trendInsight": "트렌드/아이디어 관점 레퍼런스 대비 분석 (2-3문장)",
@@ -527,11 +549,41 @@ JSON만 응답:
 
 조회수는 레퍼런스 조회수(${refData.map((r) => r.views.toLocaleString()).join(', ')})를 기준으로 현실적으로 산출하세요.`;
 
+  const synthesizePrompt = `당신은 조회수 극대화 전문 디렉터입니다.
+프리셋: ${PRESET_CONTEXT[preset]}
+키워드: ${keywords.niche} / ${keywords.primary.join(', ')}
+레퍼런스 조회수: ${refData.map((r) => r.views.toLocaleString()).join(', ')}
+
+아래 배치별 컷보드 관찰을 통합해 최종 벤치마크 JSON을 작성하세요.
+구도·조명 평가 금지, 기획·마케팅 관점만 평가하세요.
+모든 점수는 0~100 정수, estimatedViews.min/max는 정수입니다.
+
+JSON 형식:
+{
+  "targetMetrics": ${METRICS_SCHEMA},
+  "targetReview": { "summary": "총평", "strengths": ["장점1"], "weaknesses": ["단점1"] },
+  "viralIndex": 72,
+  "platformScores": [
+    { "platform": "youtube", "label": "${videoFormat === 'portrait' ? 'YouTube Shorts' : 'YouTube'}", "fitScore": 75, "estimatedViews": { "min": 10000, "max": 50000 }, "avd": 70, "ctr": 8 },
+    { "platform": "instagram", "label": "Instagram Reels", "fitScore": 72, "estimatedViews": { "min": 8000, "max": 40000 }, "avd": 68, "ctr": 7 },
+    { "platform": "tiktok", "label": "TikTok", "fitScore": 78, "estimatedViews": { "min": 15000, "max": 80000 }, "avd": 72, "ctr": 9 }
+  ],
+  "feedback": { "trendInsight": "...", "empathy": "...", "targetFit": "...", "viewStrategy": "..." },
+  "strengths": ["강점1"],
+  "improvements": ["개선1"],
+  "actionPlan": ["액션1"],
+  "benchmarkSummary": "벤치마킹 요약"
+}`;
+
   const text = await generateWithBatchedImages(
     prompt,
     imageDataUrls,
-    `${prompt}\n\n위 배치별 관찰과 컷보드 전체 맥락을 반영해, 아래 JSON 형식 하나만 출력하세요.`,
-    5,
+    synthesizePrompt,
+    {
+      batchSize: 5,
+      batchPrompt:
+        '컷보드 프레임을 기획·마케팅 관점(트렌드, 공감대, 타겟, 아이디어, 조회유도력)으로 관찰하고 bullet로 작성하세요.',
+    },
   );
 
   const parsed = parseJson<

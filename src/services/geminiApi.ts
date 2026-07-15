@@ -11,9 +11,14 @@ export function estimatePayloadBytes(parts: (string | Part)[]): number {
   return JSON.stringify({ parts: normalizeParts(parts) }).length;
 }
 
-export async function generateViaApi(parts: (string | Part)[]): Promise<string> {
+export type GenerateApiOptions = { jsonMode?: boolean };
+
+export async function generateViaApi(
+  parts: (string | Part)[],
+  options?: GenerateApiOptions,
+): Promise<string> {
   const normalized = normalizeParts(parts);
-  const payload = JSON.stringify({ parts: normalized });
+  const payload = JSON.stringify({ parts: normalized, jsonMode: options?.jsonMode ?? false });
 
   if (payload.length > 4 * 1024 * 1024) {
     throw new Error(

@@ -11,14 +11,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(503).json({ error: 'Gemini API 키가 서버에 설정되지 않았습니다.' });
   }
 
-  const { parts } = req.body as { parts?: unknown[] };
+  const { parts, jsonMode } = req.body as { parts?: unknown[]; jsonMode?: boolean };
   if (!parts?.length) {
     return res.status(400).json({ error: 'parts가 필요합니다.' });
   }
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      ...(jsonMode ? { generationConfig: { responseMimeType: 'application/json' } } : {}),
+    });
     const result = await model.generateContent(parts);
     return res.status(200).json({ text: result.response.text() });
   } catch (err) {
