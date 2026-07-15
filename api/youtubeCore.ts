@@ -8,6 +8,7 @@ export interface ReferenceVideo {
   channelTitle: string;
   viewCount: number;
   thumbnailUrl: string;
+  watchUrl?: string;
 }
 
 export interface ExtractedKeywords {
@@ -98,7 +99,77 @@ async function fetchYouTubeSearch(
 
 async function fetchVideoDetails(apiKey: string, videoIds: string[]): Promise<ReferenceVideo[]> {
   const full = await fetchVideoDetailsFull(apiKey, videoIds);
-  return full.map(({ publishedAt: _p, ...video }) => video);
+  return full.map(({ publishedAt: _p, ...video }) => enrichReferenceVideo(video));
+}
+
+function enrichReferenceVideo(video: ReferenceVideo): ReferenceVideo {
+  if (video.videoId.startsWith('estimated-')) return video;
+  return {
+    ...video,
+    thumbnailUrl: video.thumbnailUrl || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+    watchUrl: video.watchUrl ?? `https://www.youtube.com/watch?v=${video.videoId}`,
+  };
+}
+
+function normalizeTitle(value: string): string {
+  return value
+    .replace(/#\S+/g, '')
+    .replace(/[^\w\uAC00-\uD7A3\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function scoreTitleMatch(
+  candidateTitle: string,
+  targetTitle: string,
+  targetChannel?: string,
+  candidateChannel?: string,
+): number {
+  const normTarget = normalizeTitle(targetTitle);
+  const normCandidate = normalizeTitle(candidateTitle);
+  if (!normTarget || !normCandidate) return 0;
+
+  let score = 0;
+  if (normCandidate === normTarget) score = 100;
+  else if (normCandidate.includes(normTarget) || normTarget.includes(normCandidate)) score = 82;
+  else {
+    const words = normTarget.split(' ').filter((w) => w.length > 1);
+    const matched = words.filter((w) => normCandidate.includes(w)).length;
+    score = (matched / Math.max(words.length, 1)) * 70;
+  }
+
+  if (targetChannel && candidateChannel) {
+    const nc = normalizeTitle(candidateChannel);
+    const nt = normalizeTitle(targetChannel);
+    if (nc.includes(nt) || nt.includes(nc)) score += 12;
+  }
+
+  return score;
+}
+
+function findBestTitleMatch(
+  candidates: ReferenceVideo[],
+  targetTitle: string,
+  targetChannel?: string,
+): ReferenceVideo | null {
+  let best: ReferenceVideo | null = null;
+  let bestScore = 0;
+
+  for (const candidate of candidates) {
+    const score = scoreTitleMatch(candidate.title, targetTitle, targetChannel, candidate.channelTitle);
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+
+  return bestScore >= 38 ? best : null;
+}
+
+function parseEstimatedPlatform(videoId: string): PlatformId | undefined {
+  const match = videoId.match(/^estimated-(youtube|instagram|tiktok)-/);
+  return match?.[1] as PlatformId | undefined;
 }
 
 async function fetchVideoDetailsFull(apiKey: string, videoIds: string[]): Promise<VideoWithPublished[]> {
@@ -188,26 +259,87 @@ export async function searchReferenceByTitle(
   channelTitle: string,
   options: SearchOptions = {},
 ): Promise<ReferenceVideo | null> {
-  const query = `${channelTitle} ${title}`.replace(/#\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 100);
-  const results = await searchTopVideos(apiKey, query, { ...options, maxResults: 3 });
-  return results[0] ?? null;
+  const queries = [
+    `${channelTitle} ${title}`.replace(/#\S+/g, '').replace(/\s+/g, ' ').trim(),
+    title.replace(/#\S+/g, '').replace(/\s+/g, ' ').trim(),
+    title.split(/[?!,:]/)[0]?.trim() ?? title,
+  ].filter(Boolean);
+
+  const pool: ReferenceVideo[] = [];
+  const seen = new Set<string>();
+
+  for (const query of queries) {
+    const results = await searchTopVideos(apiKey, query.slice(0, 100), { ...options, maxResults: 5 });
+    for (const result of results) {
+      if (seen.has(result.videoId)) continue;
+      seen.add(result.videoId);
+      pool.push(result);
+    }
+    const match = findBestTitleMatch(pool, title, channelTitle);
+    if (match) return match;
+  }
+
+  return findBestTitleMatch(pool, title, channelTitle);
 }
 
 export async function resolveEstimatedReference(
   apiKey: string,
   video: ReferenceVideo,
   orientation: VideoOrientation,
+  platform?: PlatformId,
 ): Promise<ReferenceVideo> {
-  if (!video.videoId.startsWith('estimated-')) return video;
+  if (!video.videoId.startsWith('estimated-')) {
+    return enrichReferenceVideo(video);
+  }
+
+  const inferredPlatform = platform ?? parseEstimatedPlatform(video.videoId) ?? 'youtube';
+  const searchOrientation = inferredPlatform === 'youtube' ? orientation : 'portrait';
+  const title = video.title.replace(/#\S+/g, '').replace(/\s+/g, ' ').trim();
+  const channel = video.channelTitle.trim();
+
+  const queryCandidates = [
+    `${channel} ${title}`.trim(),
+    title,
+    title.split(/[?!,:]/)[0]?.trim() ?? title,
+    title.split(' ').slice(0, 6).join(' ').trim(),
+  ].filter(Boolean);
+
+  const seenIds = new Set<string>();
+  const pool: ReferenceVideo[] = [];
+
+  const collect = (results: ReferenceVideo[]) => {
+    for (const result of results) {
+      if (seenIds.has(result.videoId)) continue;
+      seenIds.add(result.videoId);
+      pool.push(result);
+    }
+  };
+
   try {
-    const match = await searchReferenceByTitle(apiKey, video.title, video.channelTitle, {
-      orientation,
-      maxResults: 3,
-    });
-    if (match) return match;
+    for (const query of queryCandidates) {
+      collect(await searchTopVideos(apiKey, query.slice(0, 100), {
+        orientation: searchOrientation,
+        maxResults: 5,
+      }));
+    }
+
+    if (inferredPlatform !== 'youtube') {
+      const { references } = await searchPlatformReferences(
+        apiKey,
+        `${title} ${channel}`.trim(),
+        searchOrientation,
+        inferredPlatform,
+        5,
+      );
+      collect(references);
+    }
+
+    const match = findBestTitleMatch(pool, video.title, video.channelTitle);
+    if (match) return enrichReferenceVideo(match);
   } catch {
     /* keep estimated */
   }
+
   return video;
 }
 

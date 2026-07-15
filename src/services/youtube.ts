@@ -44,8 +44,9 @@ export async function searchPlatformReferences(
 export async function resolveEstimatedReference(
   video: ReferenceVideo,
   orientation: VideoOrientation,
+  platform?: PlatformId,
 ): Promise<ReferenceVideo> {
-  return youtubeApi('resolveEstimatedReference', { video, orientation });
+  return youtubeApi('resolveEstimatedReference', { video, orientation, platform });
 }
 
 export async function searchTrendingRelatedVideos(

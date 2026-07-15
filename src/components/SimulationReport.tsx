@@ -178,46 +178,57 @@ function ReferenceShowcaseCard({
   rank: number;
   similarQuery?: string;
 }) {
-  const isEstimated = isEstimatedReference(reference.video.videoId);
+  const isUnresolved = isEstimatedReference(reference.video.videoId);
   const hasThumbnail = !!reference.video.thumbnailUrl;
   const score = avgMetrics(reference.metrics);
   const links = getReferenceLinkPair(reference.video, similarQuery);
-  const primaryHref = links.watch?.href ?? links.similar.href;
-  const primaryLabel = links.watch?.label ?? links.similar.label;
+  const watchLink = links.watch;
+
+  const thumbContent = (
+    <div className="ref-showcase-thumb">
+      {hasThumbnail ? (
+        <img src={reference.video.thumbnailUrl} alt={reference.video.title} loading="lazy" />
+      ) : (
+        <div className="ref-showcase-placeholder">
+          <Film size={28} strokeWidth={1.2} />
+          <span>{isUnresolved ? '레퍼런스 연결 중' : '썸네일 없음'}</span>
+        </div>
+      )}
+      <span className="ref-showcase-rank">#{rank}</span>
+      <span className="ref-showcase-score">{score} 기획점</span>
+      {isUnresolved && <span className="ref-showcase-est-badge">링크 미연결</span>}
+    </div>
+  );
 
   return (
     <div className="ref-showcase-card">
-      <a
-        href={primaryHref}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="ref-showcase-thumb-link"
-        title={primaryLabel}
-      >
-        <div className="ref-showcase-thumb">
-          {hasThumbnail ? (
-            <img src={reference.video.thumbnailUrl} alt={reference.video.title} loading="lazy" />
-          ) : (
-            <div className="ref-showcase-placeholder">
-              <Film size={28} strokeWidth={1.2} />
-              <span>{isEstimated ? 'AI 추정 레퍼런스' : '썸네일 없음'}</span>
-            </div>
-          )}
-          <span className="ref-showcase-rank">#{rank}</span>
-          <span className="ref-showcase-score">{score} 기획점</span>
-          {isEstimated && <span className="ref-showcase-est-badge">AI 추정</span>}
-        </div>
-      </a>
-      <div className="ref-showcase-body">
+      {watchLink ? (
         <a
-          href={primaryHref}
+          href={watchLink.href}
           target="_blank"
           rel="noopener noreferrer"
-          className="ref-title-link"
-          title={reference.video.title}
+          className="ref-showcase-thumb-link"
+          title={watchLink.label}
         >
-          <strong>{reference.video.title}</strong>
+          {thumbContent}
         </a>
+      ) : (
+        <div className="ref-showcase-thumb-link static">{thumbContent}</div>
+      )}
+      <div className="ref-showcase-body">
+        {watchLink ? (
+          <a
+            href={watchLink.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ref-title-link"
+            title={reference.video.title}
+          >
+            <strong>{reference.video.title}</strong>
+          </a>
+        ) : (
+          <strong>{reference.video.title}</strong>
+        )}
         <span className="ref-showcase-meta">
           {reference.video.channelTitle} · {formatViews(reference.video.viewCount)} views
         </span>
@@ -716,8 +727,8 @@ export function SimulationReport({
           </h3>
           <p className="ref-showcase-desc">
             {isRealData
-              ? `"${benchmark.keywords.searchQuery}" — ${formatLabel} 고조회수 영상 ${showcaseRefs.length}개와 비교했습니다. 레퍼런스 영상 보기와 유사 영상 검색 버튼을 사용하세요.`
-              : `${ORIENTATION_REFERENCE_HINT[videoFormat]} 중 상위 영상 ${showcaseRefs.length}개(AI 추정)와 비교했습니다. 레퍼런스 검색과 유사 영상 검색 버튼으로 YouTube를 열 수 있습니다.`}
+              ? `"${benchmark.keywords.searchQuery}" — ${formatLabel} 고조회수 영상 ${showcaseRefs.length}개와 비교했습니다. 빨간 버튼으로 대조분석에 사용한 레퍼런스 영상을 바로 열 수 있습니다.`
+              : `${ORIENTATION_REFERENCE_HINT[videoFormat]} 중 상위 영상 ${showcaseRefs.length}개와 비교했습니다. 레퍼런스 영상 보기 버튼이 보이면 해당 YouTube 영상으로 이동합니다.`}
           </p>
           <div className="ref-showcase-grid">
             {showcaseRefs.map((ref, i) => (
@@ -735,21 +746,24 @@ export function SimulationReport({
               <summary>추가 레퍼런스 {extraRefs.length}개 보기</summary>
               <div className="reference-list">
                 {extraRefs.map((ref, i) => {
-                  const links = getReferenceLinkPair(ref.video, similarQuery);
-                  const primaryHref = links.watch?.href ?? links.similar.href;
+                  const refLinks = getReferenceLinkPair(ref.video, similarQuery);
                   return (
                   <div key={ref.video.videoId + i} className="reference-item">
                     <div className="reference-rank">#{i + SHOWCASE_COUNT + 1}</div>
                     <div className="reference-info">
-                      <a
-                        href={primaryHref}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="ref-title-link"
-                        title={ref.video.title}
-                      >
+                      {refLinks.watch ? (
+                        <a
+                          href={refLinks.watch.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ref-title-link"
+                          title={ref.video.title}
+                        >
+                          <strong>{ref.video.title}</strong>
+                        </a>
+                      ) : (
                         <strong>{ref.video.title}</strong>
-                      </a>
+                      )}
                       <span>{ref.video.channelTitle} · {formatViews(ref.video.viewCount)} views</span>
                       <p>{ref.summary}</p>
                     </div>

@@ -4,11 +4,6 @@ export function isEstimatedReference(videoId: string): boolean {
   return videoId.startsWith('estimated-');
 }
 
-function buildSearchQuery(video: ReferenceVideo): string {
-  const title = video.title.replace(/#\S+/g, '').replace(/\s+/g, ' ').trim();
-  return `${video.channelTitle} ${title}`.trim().slice(0, 120);
-}
-
 export interface ReferenceLink {
   href: string;
   label: string;
@@ -35,34 +30,25 @@ function buildSimilarSearchQuery(video: ReferenceVideo, nicheQuery?: string): st
   return video.title.replace(/#\S+/g, '').replace(/\?+/g, '').replace(/\s+/g, ' ').trim().slice(0, 100);
 }
 
-export function getReferenceLinkPair(video: ReferenceVideo, nicheQuery?: string): ReferenceLinkPair {
-  const referenceSearchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(buildSearchQuery(video))}`;
-  const similarUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(buildSimilarSearchQuery(video, nicheQuery))}`;
+export function getReferenceWatchLink(video: ReferenceVideo): ReferenceLink | null {
+  if (isEstimatedReference(video.videoId)) return null;
 
-  if (!isEstimatedReference(video.videoId)) {
-    return {
-      watch: {
-        href: getYouTubeWatchUrl(video.videoId),
-        label: '레퍼런스 영상 보기',
-        isSearch: false,
-        canEmbed: true,
-      },
-      similar: {
-        href: similarUrl,
-        label: '유사 영상 검색',
-        isSearch: true,
-        canEmbed: false,
-      },
-    };
-  }
+  const href = video.watchUrl ?? getYouTubeWatchUrl(video.videoId);
+  if (!href) return null;
 
   return {
-    watch: {
-      href: referenceSearchUrl,
-      label: '레퍼런스 검색',
-      isSearch: true,
-      canEmbed: false,
-    },
+    href,
+    label: '레퍼런스 영상 보기',
+    isSearch: false,
+    canEmbed: true,
+  };
+}
+
+export function getReferenceLinkPair(video: ReferenceVideo, nicheQuery?: string): ReferenceLinkPair {
+  const similarUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(buildSimilarSearchQuery(video, nicheQuery))}`;
+
+  return {
+    watch: getReferenceWatchLink(video),
     similar: {
       href: similarUrl,
       label: '유사 영상 검색',

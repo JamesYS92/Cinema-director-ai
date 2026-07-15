@@ -36,14 +36,14 @@ async function resolveReferenceAnalyses(
   references: ReferenceAnalysis[],
   videoFormat: VideoOrientation,
   youtubeEnabled: boolean,
+  platform?: PlatformId,
 ): Promise<ReferenceAnalysis[]> {
   if (!youtubeEnabled) return references;
 
   const resolved = await Promise.all(
     references.map(async (ref) => {
       try {
-        const video = await resolveEstimatedReference(ref.video, videoFormat);
-        if (video.videoId === ref.video.videoId) return ref;
+        const video = await resolveEstimatedReference(ref.video, videoFormat, platform);
         return { ...ref, video };
       } catch {
         return ref;
@@ -156,7 +156,7 @@ export async function runBenchmarkPipeline(
       const label = PLATFORM_LABELS[platform];
       const estimated = multi[platform] ?? [];
       const references = youtubeEnabled
-        ? await resolveReferenceAnalyses(estimated, videoFormat, true)
+        ? await resolveReferenceAnalyses(estimated, videoFormat, true, platform)
         : estimated;
       platformBenchmarks.push({
         platform,
@@ -213,9 +213,18 @@ export async function runBenchmarkPipeline(
 
   if (youtubeEnabled) {
     onProgress?.('references', '레퍼런스 영상 링크 연결 중...');
-    referenceAnalyses = await resolveReferenceAnalyses(referenceAnalyses, videoFormat, true);
+    for (const pb of platformBenchmarks) {
+      pb.references = await resolveReferenceAnalyses(pb.references, videoFormat, true, pb.platform);
+      const resolvedCount = pb.references.filter((r) => !r.video.videoId.startsWith('estimated-')).length;
+      if (resolvedCount > 0 && pb.references.length > 0) {
+        pb.dataSource = resolvedCount === pb.references.length ? 'youtube_api' : pb.dataSource;
+      }
+    }
+    referenceAnalyses = await resolveReferenceAnalyses(referenceAnalyses, videoFormat, true, 'youtube');
     if (referenceAnalyses.some((r) => !r.video.videoId.startsWith('estimated-'))) {
-      dataSource = 'youtube_api';
+      dataSource = referenceAnalyses.every((r) => !r.video.videoId.startsWith('estimated-'))
+        ? 'youtube_api'
+        : dataSource;
     }
   }
 

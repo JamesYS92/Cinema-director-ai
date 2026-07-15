@@ -71,6 +71,8 @@ export interface ReferenceVideo {
   channelTitle: string;
   viewCount: number;
   thumbnailUrl: string;
+  /** Resolved YouTube watch URL for the reference used in benchmark comparison */
+  watchUrl?: string;
 }
 
 export type TrendBadge = 'hot' | 'rising' | 'popular';

@@ -47,6 +47,7 @@ export default async function handler(request: Request) {
             apiKey,
             params.video as youtubeCore.ReferenceVideo,
             params.orientation as youtubeCore.VideoOrientation,
+            params.platform as youtubeCore.PlatformId | undefined,
           ),
         });
 
