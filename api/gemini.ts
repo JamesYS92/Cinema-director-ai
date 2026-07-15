@@ -2,11 +2,16 @@ export const config = { runtime: 'edge' };
 
 const DEFAULT_PROXY_URL = 'https://vibe-llm-proxy-17280846291.asia-northeast3.run.app';
 const DEFAULT_PROXY_MODEL = 'gemini-3.1-flash-lite';
+const DEFAULT_VISION_MODEL = 'gemini-2.0-flash';
 
 type LlmPart = string | { text?: string; inlineData?: { mimeType: string; data: string } };
 
 function normalizeParts(parts: LlmPart[]) {
   return parts.map((part) => (typeof part === 'string' ? { text: part } : part));
+}
+
+function hasMediaParts(parts: LlmPart[]): boolean {
+  return normalizeParts(parts).some((part) => !!part.inlineData);
 }
 
 function toGeminiRestParts(parts: LlmPart[]) {
@@ -40,8 +45,6 @@ function extractProxyError(data: Record<string, unknown>, status: number): strin
   if (error && typeof error === 'object') {
     const message = (error as { message?: string }).message;
     if (message) return message;
-    const code = (error as { code?: string }).code;
-    if (code && message) return `${code}: ${message}`;
   }
   return `Study LLM 프록시 오류 (${status})`;
 }
@@ -54,14 +57,27 @@ function parseQuotaError(message: string): number | null {
   return retryMatch ? Math.min(120, Math.ceil(parseFloat(retryMatch[1]))) : 30;
 }
 
+function buildGeminiContentParts(normalized: ReturnType<typeof normalizeParts>, combinedText: string) {
+  const geminiParts: Array<Record<string, unknown>> = [];
+  if (combinedText) geminiParts.push({ text: combinedText });
+  for (const part of normalized) {
+    if (part.inlineData) {
+      geminiParts.push({
+        inline_data: { mime_type: part.inlineData.mimeType, data: part.inlineData.data },
+      });
+    }
+  }
+  return geminiParts;
+}
+
 function buildProxyBodies(parts: LlmPart[], jsonMode: boolean): Record<string, unknown>[] {
   const normalized = normalizeParts(parts);
-  const model = (process.env.STUDY_LLM_MODEL?.trim() || DEFAULT_PROXY_MODEL);
+  const model = process.env.STUDY_LLM_MODEL?.trim() || DEFAULT_PROXY_MODEL;
+  const visionModel = process.env.STUDY_LLM_VISION_MODEL?.trim() || DEFAULT_VISION_MODEL;
   const jsonPrefix = jsonMode ? '반드시 유효한 JSON만 출력하세요.\n\n' : '';
 
   const textChunks: string[] = [];
   const imageUrls: string[] = [];
-
   for (const part of normalized) {
     if (part.text) textChunks.push(part.text);
     if (part.inlineData) {
@@ -70,55 +86,45 @@ function buildProxyBodies(parts: LlmPart[], jsonMode: boolean): Record<string, u
   }
 
   const combinedText = `${jsonPrefix}${textChunks.join('\n\n')}`.trim();
-  const bodies: Record<string, unknown>[] = [];
 
   if (imageUrls.length === 0) {
-    bodies.push({
-      provider: 'google',
-      model,
-      messages: [{ role: 'user', content: combinedText }],
-      maxOutputTokens: 8192,
-    });
-    return bodies;
+    return [
+      {
+        provider: 'google',
+        model,
+        messages: [{ role: 'user', content: combinedText }],
+        maxOutputTokens: 8192,
+      },
+    ];
   }
 
-  // Study 프록시: messages + image_url (OpenAI 스타일)
-  bodies.push({
-    provider: 'google',
-    model,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: combinedText },
-          ...imageUrls.map((url) => ({
-            type: 'image_url',
-            image_url: { url },
-          })),
-        ],
-      },
-    ],
-    maxOutputTokens: 8192,
-  });
+  const geminiParts = buildGeminiContentParts(normalized, combinedText);
+  const bodies: Record<string, unknown>[] = [];
 
-  // fallback: inline_data 블록
+  for (const candidate of [visionModel, model]) {
+    bodies.push({
+      provider: 'google',
+      model: candidate,
+      contents: [{ role: 'user', parts: geminiParts }],
+      maxOutputTokens: 8192,
+    });
+    bodies.push({
+      provider: 'google',
+      model: candidate,
+      contents: [{ parts: geminiParts }],
+      maxOutputTokens: 8192,
+    });
+  }
+
   bodies.push({
     provider: 'google',
-    model,
+    model: visionModel,
     messages: [
       {
         role: 'user',
         content: [
           { type: 'text', text: combinedText },
-          ...normalized
-            .filter((part) => part.inlineData)
-            .map((part) => ({
-              type: 'inline_data',
-              inline_data: {
-                mime_type: part.inlineData!.mimeType,
-                data: part.inlineData!.data,
-              },
-            })),
+          ...imageUrls.map((url) => ({ type: 'image_url', image_url: { url } })),
         ],
       },
     ],
@@ -140,9 +146,6 @@ async function callProxy(baseUrl: string, token: string, body: Record<string, un
 
 async function generateViaStudyProxy(parts: LlmPart[], jsonMode: boolean): Promise<Response> {
   const token = (process.env.STUDY_LLM_API_TOKEN ?? '').trim();
-  if (!token) {
-    return Response.json({ error: 'Study LLM API 토큰이 설정되지 않았습니다.' }, { status: 503 });
-  }
   if (!token.startsWith('study_live_')) {
     return Response.json(
       { error: 'STUDY_LLM_API_TOKEN 형식이 잘못되었습니다. study_live_ 로 시작해야 합니다.' },
@@ -152,7 +155,6 @@ async function generateViaStudyProxy(parts: LlmPart[], jsonMode: boolean): Promi
 
   const baseUrl = (process.env.STUDY_LLM_API_URL?.trim() || DEFAULT_PROXY_URL).replace(/\/$/, '');
   const bodies = buildProxyBodies(parts, jsonMode);
-
   let lastError = 'Study LLM 프록시 오류';
   let lastStatus = 500;
 
@@ -170,23 +172,11 @@ async function generateViaStudyProxy(parts: LlmPart[], jsonMode: boolean): Promi
 
     lastStatus = result.status;
     lastError = extractProxyError(result.data, result.status);
-
     if (result.status === 429) {
       return Response.json({ error: lastError, retryAfter: 30 }, { status: 429 });
     }
     if (result.status === 401 || result.status === 403) {
       return Response.json({ error: lastError }, { status: result.status });
-    }
-
-    const lower = lastError.toLowerCase();
-    if (lower.includes('model is not allowed')) {
-      return Response.json(
-        {
-          error:
-            `${lastError}. Vercel 환경변수 STUDY_LLM_MODEL을 gemini-3.1-flash-lite 로 설정해 주세요.`,
-        },
-        { status: 400 },
-      );
     }
   }
 
@@ -199,16 +189,16 @@ async function generateViaDirectGemini(parts: LlmPart[], jsonMode: boolean): Pro
     return Response.json({ error: 'Gemini API 키가 서버에 설정되지 않았습니다.' }, { status: 503 });
   }
 
-  const body: Record<string, unknown> = {
+  const payload: Record<string, unknown> = {
     contents: [{ parts: toGeminiRestParts(parts) }],
   };
   if (jsonMode) {
-    body.generationConfig = { responseMimeType: 'application/json' };
+    payload.generationConfig = { responseMimeType: 'application/json' };
   }
 
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
   );
 
   const data = (await res.json().catch(() => ({}))) as {
@@ -236,6 +226,42 @@ async function generateViaDirectGemini(parts: LlmPart[], jsonMode: boolean): Pro
   return Response.json({ text });
 }
 
+async function generateWithProvider(
+  parts: LlmPart[],
+  jsonMode: boolean,
+  useProxy: boolean,
+  hasDirectKey: boolean,
+): Promise<Response> {
+  const hasMedia = hasMediaParts(parts);
+
+  // Study 프록시는 멀티모달(이미지) 미지원 → 이미지는 Gemini 직접 호출 우선
+  if (hasMedia) {
+    if (hasDirectKey) {
+      return generateViaDirectGemini(parts, jsonMode);
+    }
+    if (useProxy) {
+      const proxyResponse = await generateViaStudyProxy(parts, jsonMode);
+      if (proxyResponse.status < 400) return proxyResponse;
+      const proxyData = (await proxyResponse.clone().json().catch(() => ({}))) as { error?: string };
+      return Response.json(
+        {
+          error:
+            proxyData.error ??
+            '이미지 분석에 실패했습니다. Vercel에 GEMINI_API_KEY를 추가해 주세요. (Study 프록시는 이미지 미지원)',
+        },
+        { status: proxyResponse.status },
+      );
+    }
+    return Response.json(
+      { error: '이미지 분석에는 GEMINI_API_KEY가 필요합니다.' },
+      { status: 503 },
+    );
+  }
+
+  if (useProxy) return generateViaStudyProxy(parts, jsonMode);
+  return generateViaDirectGemini(parts, jsonMode);
+}
+
 export default async function handler(request: Request) {
   if (request.method !== 'POST') {
     return Response.json({ error: 'Method not allowed' }, { status: 405 });
@@ -257,6 +283,5 @@ export default async function handler(request: Request) {
     return Response.json({ error: 'parts가 필요합니다.' }, { status: 400 });
   }
 
-  if (useProxy) return generateViaStudyProxy(body.parts, !!body.jsonMode);
-  return generateViaDirectGemini(body.parts, !!body.jsonMode);
+  return generateWithProvider(body.parts, !!body.jsonMode, useProxy, hasDirectKey);
 }
